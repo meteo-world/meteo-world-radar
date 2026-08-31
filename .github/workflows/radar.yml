@@ -19,7 +19,7 @@ jobs:
       - name: Installer les dependances Python
         run: |
           python -m pip install --upgrade pip
-          pip install requests
+          pip install requests numpy pillow
 
       - name: Telecharger le radar Meteo-France
         env:
@@ -35,11 +35,13 @@ jobs:
             cmake \
             make \
             libgdal-dev \
-            gdal-bin
+            gdal-bin \
+            python3-gdal
 
           g++-14 --version
           cmake --version
           gdal-config --version
+          gdalinfo --version
 
       - name: Recuperer debufrizer
         run: |
@@ -65,7 +67,10 @@ jobs:
           cd debufrizer/examples
 
           echo "=== Decodage IMFR27 ==="
-          ../build/debufrizer latest-imfr27.bufr radar_
+
+          ../build/debufrizer \
+            latest-imfr27.bufr \
+            radar_
 
           echo "=== Fichiers produits ==="
           ls -lh
@@ -73,15 +78,62 @@ jobs:
       - name: Recuperer le TIFF genere
         run: |
           mkdir -p output
-          find debufrizer/examples -type f -name "radar_*.tif" -exec cp {} output/ \;
+
+          find debufrizer/examples \
+            -type f \
+            -name "radar_*.tif" \
+            -exec cp {} output/ \;
 
           echo "=== OUTPUT ==="
           ls -lh output/
 
+          TIFF=$(find output -type f -name "radar_*.tif" | head -n 1)
+
+          if [ -z "$TIFF" ]; then
+            echo "ERREUR : aucun TIFF radar genere."
+            exit 1
+          fi
+
+          cp "$TIFF" output/radar-latest.tif
+
+      - name: Examiner le TIFF radar
+        run: |
+          echo "====================================="
+          echo "INFORMATIONS GEOTIFF"
+          echo "====================================="
+
+          gdalinfo \
+            -stats \
+            output/radar-latest.tif
+
+      - name: Creer le PNG radar
+        run: |
+          echo "====================================="
+          echo "CREATION PNG RADAR"
+          echo "====================================="
+
+          python create_radar_png.py
+
+          echo ""
+          echo "=== DATA ==="
+          ls -lh data/
+
+      - name: Verifier le PNG
+        run: |
+          if [ ! -f data/radar-latest.png ]; then
+            echo "ERREUR : radar-latest.png absent."
+            exit 1
+          fi
+
+          echo "PNG radar cree avec succes."
+          file data/radar-latest.png
+          ls -lh data/radar-latest.png
+
       - name: Sauvegarder le resultat
         uses: actions/upload-artifact@v4
         with:
-          name: radar-decode-test
+          name: radar-png-test
           path: |
-            output/
+            output/radar-latest.tif
+            data/radar-latest.png
             data/latest-imfr27.json
