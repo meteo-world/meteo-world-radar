@@ -1,0 +1,223 @@
+import os
+import io
+import gzip
+import json
+import tarfile
+import re
+from pathlib import Path
+from datetime import datetime, timezone
+
+import requests
+
+
+API_URL = (
+    "https://public-api.meteofrance.fr/"
+    "public/DPPaquetRadar/v1/mosaique/paquet"
+)
+
+API_KEY = os.environ.get("METEOFRANCE_RADAR_API_KEY")
+
+OUTPUT_DIR = Path("data")
+OUTPUT_DIR.mkdir(exist_ok=True)
+
+BUFR_FILE = OUTPUT_DIR / "latest-imfr27.bufr"
+INFO_FILE = OUTPUT_DIR / "latest-imfr27.json"
+
+
+if not API_KEY:
+    raise RuntimeError(
+        "Le secret METEOFRANCE_RADAR_API_KEY est absent."
+    )
+
+
+print("=====================================")
+print("MÉTÉO WORLD - RADAR IMFR27")
+print("=====================================")
+
+print("Téléchargement du paquet radar...")
+
+
+response = requests.get(
+    API_URL,
+    headers={
+        "apikey": API_KEY,
+        "Accept": "application/gzip",
+    },
+    timeout=120,
+)
+
+response.raise_for_status()
+
+archive_data = response.content
+
+print(
+    f"Paquet téléchargé : "
+    f"{len(archive_data) / 1024 / 1024:.2f} Mo"
+)
+
+
+# ---------------------------------------------------------
+# OUVERTURE DU TAR.GZ
+# ---------------------------------------------------------
+
+archive = io.BytesIO(archive_data)
+
+with tarfile.open(
+    fileobj=archive,
+    mode="r:gz"
+) as tar:
+
+    candidates = []
+
+    pattern = re.compile(
+        r"T_IMFR27_C_LFPW_(\d{14})\.bufr\.gz$",
+        re.IGNORECASE
+    )
+
+    for member in tar.getmembers():
+
+        if not member.isfile():
+            continue
+
+        filename = Path(member.name).name
+
+        match = pattern.match(filename)
+
+        if match:
+
+            candidates.append(
+                (
+                    match.group(1),
+                    member,
+                    filename
+                )
+            )
+
+
+    print(
+        f"Produits IMFR27 trouvés : "
+        f"{len(candidates)}"
+    )
+
+
+    if not candidates:
+
+        raise RuntimeError(
+            "Aucun produit IMFR27 trouvé."
+        )
+
+
+    # Plus récent
+    candidates.sort(
+        key=lambda item: item[0],
+        reverse=True
+    )
+
+    timestamp, member, filename = candidates[0]
+
+    print(
+        f"Dernier produit : {filename}"
+    )
+
+
+    extracted = tar.extractfile(member)
+
+    if extracted is None:
+
+        raise RuntimeError(
+            "Impossible de lire IMFR27."
+        )
+
+
+    compressed_bufr = extracted.read()
+
+
+# ---------------------------------------------------------
+# DÉCOMPRESSION DU BUFR.GZ
+# ---------------------------------------------------------
+
+print("Décompression IMFR27...")
+
+bufr_data = gzip.decompress(
+    compressed_bufr
+)
+
+
+if not bufr_data.startswith(b"BUFR"):
+
+    raise RuntimeError(
+        "Le produit extrait n'est pas un BUFR."
+    )
+
+
+print("Signature BUFR : OK")
+
+
+# ---------------------------------------------------------
+# ENREGISTREMENT
+# ---------------------------------------------------------
+
+BUFR_FILE.write_bytes(
+    bufr_data
+)
+
+
+observation_time = datetime.strptime(
+    timestamp,
+    "%Y%m%d%H%M%S"
+).replace(
+    tzinfo=timezone.utc
+)
+
+
+info = {
+
+    "product": "IMFR27",
+
+    "source_file": filename,
+
+    "observation_time_utc":
+        observation_time.isoformat()
+        .replace("+00:00", "Z"),
+
+    "bufr_file":
+        BUFR_FILE.name,
+
+    "bufr_size_bytes":
+        len(bufr_data),
+
+    "updated_at_utc":
+        datetime.now(timezone.utc)
+        .isoformat()
+        .replace("+00:00", "Z"),
+}
+
+
+INFO_FILE.write_text(
+    json.dumps(
+        info,
+        indent=2,
+        ensure_ascii=False
+    ),
+    encoding="utf-8",
+)
+
+
+print(
+    f"BUFR créé : {BUFR_FILE}"
+)
+
+print(
+    f"Taille BUFR : "
+    f"{len(bufr_data) / 1024:.1f} Ko"
+)
+
+print(
+    f"Date radar : "
+    f"{info['observation_time_utc']}"
+)
+
+print()
+print("=====================================")
+print("EXTRACTION IMFR27 TERMINÉE")
+print("=====================================")
