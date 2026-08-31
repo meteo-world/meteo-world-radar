@@ -35,8 +35,7 @@ jobs:
             cmake \
             make \
             libgdal-dev \
-            gdal-bin \
-            python3-gdal
+            gdal-bin
 
           g++-14 --version
           cmake --version
@@ -52,12 +51,8 @@ jobs:
           cd debufrizer
           mkdir -p build
           cd build
-
-          cmake .. \
-            -DCMAKE_CXX_COMPILER=g++-14
-
+          cmake .. -DCMAKE_CXX_COMPILER=g++-14
           make -j2
-
           echo "=== Fichiers compiles ==="
           ls -lh
 
@@ -65,35 +60,22 @@ jobs:
         run: |
           cp data/latest-imfr27.bufr debufrizer/examples/latest-imfr27.bufr
           cd debufrizer/examples
-
           echo "=== Decodage IMFR27 ==="
-
-          ../build/debufrizer \
-            latest-imfr27.bufr \
-            radar_
-
+          ../build/debufrizer latest-imfr27.bufr radar_
           echo "=== Fichiers produits ==="
           ls -lh
 
       - name: Recuperer le TIFF genere
         run: |
           mkdir -p output
-
-          find debufrizer/examples \
-            -type f \
-            -name "radar_*.tif" \
-            -exec cp {} output/ \;
-
+          find debufrizer/examples -type f -name "radar_*.tif" -exec cp {} output/ \;
           echo "=== OUTPUT ==="
           ls -lh output/
-
           TIFF=$(find output -type f -name "radar_*.tif" | head -n 1)
-
           if [ -z "$TIFF" ]; then
             echo "ERREUR : aucun TIFF radar genere."
             exit 1
           fi
-
           cp "$TIFF" output/radar-latest.tif
 
       - name: Examiner le TIFF radar
@@ -101,33 +83,25 @@ jobs:
           echo "====================================="
           echo "INFORMATIONS GEOTIFF"
           echo "====================================="
+          gdalinfo -stats output/radar-latest.tif
 
-          gdalinfo \
-            -stats \
-            output/radar-latest.tif
-
-      - name: Creer le PNG radar
+      - name: Creer le PNG radar georeference
         run: |
           echo "====================================="
-          echo "CREATION PNG RADAR"
+          echo "CREATION PNG RADAR EPSG4326"
           echo "====================================="
-
           python create_radar_png.py
-
           echo ""
           echo "=== DATA ==="
           ls -lh data/
 
       - name: Verifier le PNG
         run: |
-          if [ ! -f data/radar-latest.png ]; then
-            echo "ERREUR : radar-latest.png absent."
-            exit 1
-          fi
-
+          test -f data/radar-latest.png
+          test -f data/radar-latest.json
           echo "PNG radar cree avec succes."
           file data/radar-latest.png
-          ls -lh data/radar-latest.png
+          cat data/radar-latest.json
 
       - name: Sauvegarder le resultat
         uses: actions/upload-artifact@v4
@@ -135,5 +109,7 @@ jobs:
           name: radar-png-test
           path: |
             output/radar-latest.tif
+            output/radar-latest-4326.tif
             data/radar-latest.png
+            data/radar-latest.json
             data/latest-imfr27.json
