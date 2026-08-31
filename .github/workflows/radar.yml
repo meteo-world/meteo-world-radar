@@ -1,0 +1,40 @@
+name: Meteo World Radar
+
+on:
+  workflow_dispatch:
+
+jobs:
+  radar:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Recuperer le depot
+        uses: actions/checkout@v4
+
+      - name: Installer Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Installer les dependances
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests
+
+      - name: Telecharger le radar Meteo-France
+        env:
+          METEOFRANCE_RADAR_API_KEY: ${{ secrets.METEOFRANCE_RADAR_API_KEY }}
+        run: |
+          python download_radar.py
+
+      - name: Afficher les fichiers generes
+        run: |
+          ls -lh data/
+
+      - name: Sauvegarder les fichiers radar
+        uses: actions/upload-artifact@v4
+        with:
+          name: radar-imfr27
+          path: |
+            data/latest-imfr27.bufr
+            data/latest-imfr27.json
