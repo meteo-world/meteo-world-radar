@@ -243,14 +243,14 @@ jobs:
           )
 
           Path("data/imfr27-list.txt").write_text(
-              "\n".join(item["bufr_file"] for item in items),
+              "\n".join(item["bufr_file"] for item in items) + "\n",
               encoding="utf-8"
           )
 
           print("IMFR27 à traiter :", len(items))
           PY
 
-          while IFS= read -r BUFR; do
+          while IFS= read -r BUFR || [ -n "$BUFR" ]; do
             [ -z "$BUFR" ] && continue
 
             BASE="$(basename "$BUFR" .bufr)"
