@@ -1,1 +1,691 @@
 
+name: Meteo World Radar
+
+on:
+  workflow_dispatch:
+
+  schedule:
+    - cron: "2-57/5 * * * *"
+
+
+jobs:
+
+  radar:
+
+    runs-on: ubuntu-latest
+
+    steps:
+
+      # ============================================================
+      # DEPOT
+      # ============================================================
+
+      - name: Recuperer le depot
+        uses: actions/checkout@v4
+
+
+      # ============================================================
+      # PYTHON
+      # ============================================================
+
+      - name: Installer Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+
+      - name: Installer dependances Python
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests numpy pillow
+
+
+      # ============================================================
+      # TELECHARGEMENT RADAR METEO-FRANCE
+      # ============================================================
+
+      - name: Telecharger radar Meteo-France
+        env:
+          METEOFRANCE_RADAR_API_KEY: ${{ secrets.METEOFRANCE_RADAR_API_KEY }}
+
+        run: |
+          python download_radar.py
+
+
+      # ============================================================
+      # OUTILS SYSTEME
+      # ============================================================
+
+      - name: Installer outils
+        run: |
+
+          sudo apt-get update
+
+          sudo apt-get install -y \
+            g++-14 \
+            cmake \
+            make \
+            libgdal-dev \
+            gdal-bin \
+            lftp
+
+          echo ""
+          echo "=============================================="
+          echo "VERSIONS"
+          echo "=============================================="
+
+          g++-14 --version
+          cmake --version
+          gdalinfo --version
+
+
+      # ============================================================
+      # DEBUFRIZER
+      # ============================================================
+
+      - name: Recuperer debufrizer
+        run: |
+
+          git clone \
+            https://github.com/Meteo-Concept/debufrizer.git
+
+
+      # ============================================================
+      # DIAGNOSTIC SOURCE
+      # ============================================================
+
+      - name: Examiner code grille BUFR
+        run: |
+
+          echo "===================================================="
+          echo "CODE DEBUFRIZER - GRILLE IMFR27"
+          echo "===================================================="
+
+          sed -n '430,555p' \
+            debufrizer/section3and4.cpp
+
+          echo ""
+          echo "===================================================="
+          echo "DESCRIPTEURS METEO-FRANCE"
+          echo "===================================================="
+
+          grep -RniE \
+            "005195|006198|005001|006001|005033|006033|030021|030022|029001|029192" \
+            debufrizer \
+            --exclude-dir=.git \
+            || true
+
+
+      # ============================================================
+      # DIAGNOSTIC METEO WORLD
+      # ============================================================
+
+      - name: Ajouter diagnostic Meteo World
+        run: |
+
+          python <<'PY'
+
+          from pathlib import Path
+
+          p = Path("debufrizer/section3and4.cpp")
+
+          s = p.read_text(
+              encoding="utf-8"
+          )
+
+          marker = "OGRSpatialReference projection;"
+
+          if marker not in s:
+
+              raise SystemExit(
+                  "ERREUR : emplacement projection introuvable"
+              )
+
+          diagnostic = r'''
+
+              std::println(
+                  std::cerr,
+                  ""
+              );
+
+              std::println(
+                  std::cerr,
+                  "=============================================="
+              );
+
+              std::println(
+                  std::cerr,
+                  "METEO WORLD - DIAGNOSTIC GRILLE IMFR27"
+              );
+
+              std::println(
+                  std::cerr,
+                  "origLatitude = {}",
+                  grid.origLatitude
+              );
+
+              std::println(
+                  std::cerr,
+                  "origLongitude = {}",
+                  grid.origLongitude
+              );
+
+              std::println(
+                  std::cerr,
+                  "Projection debufrizer = SetPS(45, 0, 1, 0, 0)"
+              );
+
+              std::println(
+                  std::cerr,
+                  "=============================================="
+              );
+
+          '''
+
+          s = s.replace(
+              marker,
+              diagnostic + marker,
+              1
+          )
+
+          p.write_text(
+              s,
+              encoding="utf-8"
+          )
+
+          print(
+              "Diagnostic Meteo World ajoute."
+          )
+
+          PY
+
+
+      # ============================================================
+      # COMPILATION DEBUFRIZER
+      # ============================================================
+
+      - name: Compiler debufrizer
+        run: |
+
+          cd debufrizer
+
+          mkdir -p build
+
+          cd build
+
+          cmake .. \
+            -DCMAKE_CXX_COMPILER=g++-14
+
+          make -j2
+
+          echo ""
+          echo "=============================================="
+          echo "COMPILATION TERMINEE"
+          echo "=============================================="
+
+          ls -lh
+
+
+      # ============================================================
+      # DECODAGE IMFR27
+      # ============================================================
+
+      - name: Decoder IMFR27
+        run: |
+
+          cp \
+            data/latest-imfr27.bufr \
+            debufrizer/examples/latest-imfr27.bufr
+
+          cd debufrizer/examples
+
+          echo "=============================================="
+          echo "DECODAGE IMFR27"
+          echo "=============================================="
+
+          ../build/debufrizer \
+            latest-imfr27.bufr \
+            radar_ \
+            2>&1 \
+            | tee ../../debufrizer-imfr27.log
+
+          echo ""
+          echo "=============================================="
+          echo "FICHIERS PRODUITS"
+          echo "=============================================="
+
+          ls -lh
+
+
+      # ============================================================
+      # AFFICHAGE DIAGNOSTIC
+      # ============================================================
+
+      - name: Afficher diagnostic projection IMFR27
+        run: |
+
+          echo "===================================================="
+          echo "RESULTAT DIAGNOSTIC METEO WORLD"
+          echo "===================================================="
+
+          grep \
+            -A 10 \
+            -B 2 \
+            "METEO WORLD - DIAGNOSTIC GRILLE IMFR27" \
+            debufrizer-imfr27.log \
+            || true
+
+          echo ""
+          echo "===================================================="
+          echo "DESCRIPTEURS GEOGRAPHIQUES IMFR27"
+          echo "===================================================="
+
+          grep -iE \
+            "029002|029001|030021|030022|005033|006033|029192|005001|006001|005195|006198" \
+            debufrizer-imfr27.log \
+            || true
+
+
+      # ============================================================
+      # RECUPERATION DU TIFF
+      # ============================================================
+
+      - name: Recuperer TIFF
+        run: |
+
+          mkdir -p output
+
+          find debufrizer/examples \
+            -type f \
+            -name "radar_*.tif" \
+            -exec cp {} output/ \;
+
+          echo ""
+          echo "=============================================="
+          echo "TIFF DISPONIBLES"
+          echo "=============================================="
+
+          ls -lh output/
+
+          TIFF=$(find output \
+            -type f \
+            -name "radar_*.tif" \
+            | sort \
+            | tail -n 1)
+
+          if [ -z "$TIFF" ]; then
+
+              echo "ERREUR : aucun TIFF radar."
+              exit 1
+
+          fi
+
+          echo ""
+          echo "TIFF selectionne : $TIFF"
+
+          cp \
+            "$TIFF" \
+            output/radar-latest.tif
+
+
+      # ============================================================
+      # EXAMEN DU TIFF ORIGINAL
+      # ============================================================
+
+      - name: Examiner GeoTIFF original
+        run: |
+
+          echo "===================================================="
+          echo "GEOTIFF ORIGINAL DEBUFRIZER"
+          echo "===================================================="
+
+          gdalinfo \
+            -stats \
+            output/radar-latest.tif
+
+          echo ""
+          echo "===================================================="
+          echo "PROJECTION SOURCE"
+          echo "===================================================="
+
+          gdalsrsinfo \
+            output/radar-latest.tif \
+            || true
+
+
+      # ============================================================
+      # COORDONNEES DU TIFF ORIGINAL
+      # ============================================================
+
+      - name: Afficher coordonnees GeoTIFF
+        run: |
+
+          echo "===================================================="
+          echo "ORIGINE / PIXELS / COINS"
+          echo "===================================================="
+
+          gdalinfo \
+            output/radar-latest.tif \
+            | grep -E \
+            "Size is|Origin|Pixel Size|Upper Left|Lower Left|Upper Right|Lower Right|Center" \
+            || true
+
+
+      # ============================================================
+      # CREATION PNG EPSG:3857
+      # ============================================================
+
+      - name: Creer PNG radar EPSG 3857
+        run: |
+
+          echo "===================================================="
+          echo "CREATION RADAR EPSG:3857"
+          echo "===================================================="
+
+          python create_radar_png.py
+
+          echo ""
+          echo "=============================================="
+          echo "CONTENU OUTPUT"
+          echo "=============================================="
+
+          ls -lh output/
+
+          echo ""
+          echo "=============================================="
+          echo "CONTENU DATA"
+          echo "=============================================="
+
+          ls -lh data/
+
+
+      # ============================================================
+      # VERIFICATION TIFF EPSG:3857
+      # ============================================================
+
+      - name: Examiner GeoTIFF EPSG 3857
+        run: |
+
+          if [ ! -f output/radar-latest-3857.tif ]; then
+
+              echo "ERREUR : radar-latest-3857.tif absent."
+              exit 1
+
+          fi
+
+          echo "===================================================="
+          echo "GEOTIFF EPSG:3857"
+          echo "===================================================="
+
+          gdalinfo \
+            output/radar-latest-3857.tif
+
+          echo ""
+          echo "===================================================="
+          echo "PROJECTION EPSG:3857"
+          echo "===================================================="
+
+          gdalsrsinfo \
+            output/radar-latest-3857.tif \
+            || true
+
+
+      # ============================================================
+      # VERIFICATION PNG + JSON
+      # ============================================================
+
+      - name: Verifier radar final
+        run: |
+
+          if [ ! -f data/radar-latest.png ]; then
+
+              echo "ERREUR : radar-latest.png absent."
+              exit 1
+
+          fi
+
+          if [ ! -f data/radar-latest.json ]; then
+
+              echo "ERREUR : radar-latest.json absent."
+              exit 1
+
+          fi
+
+          echo "===================================================="
+          echo "PNG FINAL"
+          echo "===================================================="
+
+          file \
+            data/radar-latest.png
+
+          echo ""
+          echo "===================================================="
+          echo "JSON FINAL"
+          echo "===================================================="
+
+          cat \
+            data/radar-latest.json
+
+
+      # ============================================================
+      # VERIFICATION PROJECTION JSON
+      # ============================================================
+
+      - name: Verifier projection JSON
+        run: |
+
+          python <<'PY'
+
+          import json
+          from pathlib import Path
+
+          path = Path(
+              "data/radar-latest.json"
+          )
+
+          data = json.loads(
+              path.read_text(
+                  encoding="utf-8"
+              )
+          )
+
+          print(
+              "Projection :",
+              data.get("projection")
+          )
+
+          print(
+              "Bounds :",
+              data.get("bounds")
+          )
+
+          if data.get("projection") != "EPSG:3857":
+
+              raise SystemExit(
+                  "ERREUR : le radar final n'est pas en EPSG:3857."
+              )
+
+          print(
+              "Radar EPSG:3857 : OK"
+          )
+
+          PY
+
+
+      # ============================================================
+      # HISTORIQUE RADAR 2 HEURES + ENVOI FTP INFOMANIAK
+      # Le compte FTP arrive directement dans /cartes/radar/
+      # ============================================================
+
+      - name: Preparer historique radar
+        run: |
+          python <<'PY'
+          import json
+          from pathlib import Path
+          info = json.loads(Path("data/frame-info.json").read_text(encoding="utf-8"))
+          Path("data/frame-filename.txt").write_text(info["filename"], encoding="utf-8")
+          print("Nouvelle frame :", info["filename"])
+          print("Date radar :", info["datetime"])
+          PY
+
+      - name: Envoyer radar et frame vers Infomaniak
+        timeout-minutes: 2
+        env:
+          FTP_HOST: ${{ secrets.INFOMANIAK_SFTP_HOST }}
+          FTP_USER: ${{ secrets.INFOMANIAK_SFTP_USER }}
+          FTP_PASSWORD: ${{ secrets.INFOMANIAK_SFTP_PASSWORD }}
+        run: |
+          FRAME_NAME="$(cat data/frame-filename.txt)"
+          echo "Envoi de $FRAME_NAME"
+
+          timeout 90s lftp -u "$FTP_USER","$FTP_PASSWORD" "$FTP_HOST" <<EOF
+          set cmd:fail-exit yes
+          set ftp:ssl-allow no
+          set ftp:passive-mode yes
+          set net:timeout 15
+          set net:reconnect-interval-base 5
+          set net:reconnect-interval-max 10
+          set net:max-retries 2
+
+          mkdir -p frames
+          put data/radar-latest.png -o radar-latest.png
+          put data/radar-latest.json -o radar-latest.json
+          put data/frame-radar.png -o frames/$FRAME_NAME
+          cls -1 frames/radar-*.png > remote-frames.txt
+          bye
+          EOF
+
+          RESULT=$?
+          if [ "$RESULT" -eq 124 ]; then
+            echo "ERREUR : delai FTP depasse."
+            exit 1
+          fi
+          if [ "$RESULT" -ne 0 ]; then
+            echo "ERREUR FTP : code $RESULT"
+            exit "$RESULT"
+          fi
+
+      - name: Creer manifest 2 heures
+        run: |
+          python <<'PY'
+          import json, re
+          from datetime import datetime, timezone
+          from pathlib import Path
+
+          latest = json.loads(Path("data/radar-latest.json").read_text(encoding="utf-8"))
+          names = []
+
+          f = Path("remote-frames.txt")
+          if f.exists():
+              for line in f.read_text(encoding="utf-8", errors="ignore").splitlines():
+                  name = line.strip().replace("\\", "/").rsplit("/", 1)[-1]
+                  if re.fullmatch(r"radar-\d{8}-\d{4}\.png", name):
+                      names.append(name)
+
+          names = sorted(set(names))
+          keep = names[-24:]
+          delete = names[:-24]
+          frames = []
+
+          for name in keep:
+              m = re.fullmatch(r"radar-(\d{8})-(\d{4})\.png", name)
+              dt = datetime.strptime(m.group(1)+m.group(2), "%Y%m%d%H%M").replace(tzinfo=timezone.utc)
+              frames.append({
+                  "filename": name,
+                  "url": "frames/" + name,
+                  "datetime": dt.isoformat().replace("+00:00", "Z")
+              })
+
+          manifest = {
+              "projection": "EPSG:3857",
+              "bounds": latest.get("bounds"),
+              "count": len(frames),
+              "max_frames": 24,
+              "interval_minutes": 5,
+              "history_hours": 2,
+              "latest_datetime": frames[-1]["datetime"] if frames else latest.get("datetime"),
+              "frames": frames
+          }
+
+          Path("data/manifest.json").write_text(
+              json.dumps(manifest, indent=2, ensure_ascii=False),
+              encoding="utf-8"
+          )
+          Path("frames-to-delete.txt").write_text("\n".join(delete), encoding="utf-8")
+
+          print("Frames trouvees :", len(names))
+          print("Frames conservees :", len(keep))
+          print("Frames a supprimer :", len(delete))
+          PY
+
+      - name: Nettoyer anciennes frames et envoyer manifest
+        timeout-minutes: 2
+        env:
+          FTP_HOST: ${{ secrets.INFOMANIAK_SFTP_HOST }}
+          FTP_USER: ${{ secrets.INFOMANIAK_SFTP_USER }}
+          FTP_PASSWORD: ${{ secrets.INFOMANIAK_SFTP_PASSWORD }}
+        run: |
+          {
+            echo "set cmd:fail-exit yes"
+            echo "set ftp:ssl-allow no"
+            echo "set ftp:passive-mode yes"
+            echo "set net:timeout 15"
+            echo "set net:reconnect-interval-base 5"
+            echo "set net:reconnect-interval-max 10"
+            echo "set net:max-retries 2"
+            echo "put data/manifest.json -o manifest.json"
+
+            if [ -s frames-to-delete.txt ]; then
+              while IFS= read -r OLD_FRAME; do
+                [ -n "$OLD_FRAME" ] && printf 'rm frames/%s\n' "$OLD_FRAME"
+              done < frames-to-delete.txt
+            fi
+
+            echo "cls -l frames"
+            echo "bye"
+          } > ftp-cleanup.txt
+
+          timeout 90s lftp -u "$FTP_USER","$FTP_PASSWORD" "$FTP_HOST" -f ftp-cleanup.txt
+
+          RESULT=$?
+          if [ "$RESULT" -eq 124 ]; then
+            echo "ERREUR : delai FTP depasse."
+            exit 1
+          fi
+          if [ "$RESULT" -ne 0 ]; then
+            echo "ERREUR FTP : code $RESULT"
+            exit "$RESULT"
+          fi
+
+          echo "RADAR + HISTORIQUE 2H ENVOYES AVEC SUCCES"
+
+
+      # ============================================================
+      # ARTIFACT GITHUB
+      # ============================================================
+
+      - name: Sauvegarder diagnostic
+        if: always()
+
+        uses: actions/upload-artifact@v4
+
+        with:
+
+          name: radar-diagnostic
+
+          retention-days: 1
+
+          if-no-files-found: warn
+
+          path: |
+            debufrizer-imfr27.log
+            output/radar-latest.tif
+            output/radar-latest-3857.tif
+            data/radar-latest.png
+            data/radar-latest.json
+            data/frame-radar.png
+            data/frame-info.json
+            data/manifest.json
+            data/latest-imfr27.json
+            remote-frames.txt
+            frames-to-delete.txt
