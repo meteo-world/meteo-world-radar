@@ -289,8 +289,31 @@ jobs:
 
             cp "$TIFF" output/radar-latest.tif
 
-            # create_radar_png.py continue d'utiliser exactement la chaîne
-            # de projection/PNG déjà validée sur Météo World.
+            # IMPORTANT :
+            # create_radar_png.py lit data/latest-imfr27.json pour dater la frame.
+            # On met donc temporairement ce JSON sur le BUFR actuellement traité.
+            python - "$STAMP" <<'PYFRAME'
+          import json
+          import sys
+          from datetime import datetime, timezone
+          from pathlib import Path
+
+          stamp = sys.argv[1]
+          dt = datetime.strptime(stamp, "%Y%m%d-%H%M").replace(tzinfo=timezone.utc)
+
+          path = Path("data/latest-imfr27.json")
+          info = json.loads(path.read_text(encoding="utf-8"))
+          info["observation_time_utc"] = dt.isoformat().replace("+00:00", "Z")
+          info["source_file"] = "T_IMFR27_C_LFPW_" + dt.strftime("%Y%m%d%H%M%S") + ".bufr.gz"
+
+          path.write_text(
+              json.dumps(info, indent=2, ensure_ascii=False),
+              encoding="utf-8"
+          )
+
+          print("Date injectée pour la frame :", info["observation_time_utc"])
+          PYFRAME
+
             python create_radar_png.py
 
             if [ ! -f data/frame-radar.png ]; then
@@ -300,11 +323,36 @@ jobs:
 
             cp data/frame-radar.png "data/generated-frames/radar-$STAMP.png"
 
+            echo "Frame créée : radar-$STAMP.png"
+
           done < data/imfr27-list.txt
 
           echo ""
           echo "Frames générées :"
           ls -lh data/generated-frames/
+
+          # Remettre latest-imfr27.json sur le produit réellement le plus récent.
+          python <<'PYRESTORE'
+          import json
+          from pathlib import Path
+
+          candidates = json.loads(
+              Path("data/imfr27-candidates.json").read_text(encoding="utf-8")
+          )
+          latest = candidates[-1]
+
+          path = Path("data/latest-imfr27.json")
+          info = json.loads(path.read_text(encoding="utf-8"))
+          info["source_file"] = latest["source_file"]
+          info["observation_time_utc"] = latest["datetime"]
+
+          path.write_text(
+              json.dumps(info, indent=2, ensure_ascii=False),
+              encoding="utf-8"
+          )
+
+          print("Dernière date radar restaurée :", latest["datetime"])
+          PYRESTORE
 
       # ============================================================
       # VERIFICATION DU DERNIER RADAR
