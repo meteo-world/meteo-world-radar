@@ -1,1 +1,656 @@
+name: Meteo World Radar
 
+on:
+  workflow_dispatch:
+
+ 
+
+jobs:
+
+  radar:
+
+    runs-on: ubuntu-latest
+
+    steps:
+
+      # ============================================================
+      # DEPOT
+      # ============================================================
+
+      - name: Recuperer le depot
+        uses: actions/checkout@v4
+
+
+      # ============================================================
+      # PYTHON
+      # ============================================================
+
+      - name: Installer Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+
+      - name: Installer dependances Python
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests numpy pillow
+
+
+      # ============================================================
+      # TELECHARGEMENT RADAR METEO-FRANCE
+      # ============================================================
+
+      - name: Telecharger radar Meteo-France
+        env:
+          METEOFRANCE_RADAR_API_KEY: ${{ secrets.METEOFRANCE_RADAR_API_KEY }}
+
+        run: |
+          python download_radar.py
+
+
+      # ============================================================
+      # OUTILS SYSTEME
+      # ============================================================
+
+      - name: Installer outils
+        run: |
+
+          sudo apt-get update
+
+          sudo apt-get install -y \
+            g++-14 \
+            cmake \
+            make \
+            libgdal-dev \
+            gdal-bin \
+            lftp
+
+          echo ""
+          echo "=============================================="
+          echo "VERSIONS"
+          echo "=============================================="
+
+          g++-14 --version
+          cmake --version
+          gdalinfo --version
+
+
+      # ============================================================
+      # DEBUFRIZER
+      # ============================================================
+
+      - name: Recuperer debufrizer
+        run: |
+
+          git clone \
+            https://github.com/Meteo-Concept/debufrizer.git
+
+
+      # ============================================================
+      # DIAGNOSTIC SOURCE
+      # ============================================================
+
+      - name: Examiner code grille BUFR
+        run: |
+
+          echo "===================================================="
+          echo "CODE DEBUFRIZER - GRILLE IMFR27"
+          echo "===================================================="
+
+          sed -n '430,555p' \
+            debufrizer/section3and4.cpp
+
+          echo ""
+          echo "===================================================="
+          echo "DESCRIPTEURS METEO-FRANCE"
+          echo "===================================================="
+
+          grep -RniE \
+            "005195|006198|005001|006001|005033|006033|030021|030022|029001|029192" \
+            debufrizer \
+            --exclude-dir=.git \
+            || true
+
+
+      # ============================================================
+      # DIAGNOSTIC METEO WORLD
+      # ============================================================
+
+      - name: Ajouter diagnostic Meteo World
+        run: |
+
+          python <<'PY'
+
+          from pathlib import Path
+
+          p = Path("debufrizer/section3and4.cpp")
+
+          s = p.read_text(
+              encoding="utf-8"
+          )
+
+          marker = "OGRSpatialReference projection;"
+
+          if marker not in s:
+
+              raise SystemExit(
+                  "ERREUR : emplacement projection introuvable"
+              )
+
+          diagnostic = r'''
+
+              std::println(
+                  std::cerr,
+                  ""
+              );
+
+              std::println(
+                  std::cerr,
+                  "=============================================="
+              );
+
+              std::println(
+                  std::cerr,
+                  "METEO WORLD - DIAGNOSTIC GRILLE IMFR27"
+              );
+
+              std::println(
+                  std::cerr,
+                  "origLatitude = {}",
+                  grid.origLatitude
+              );
+
+              std::println(
+                  std::cerr,
+                  "origLongitude = {}",
+                  grid.origLongitude
+              );
+
+              std::println(
+                  std::cerr,
+                  "Projection debufrizer = SetPS(45, 0, 1, 0, 0)"
+              );
+
+              std::println(
+                  std::cerr,
+                  "=============================================="
+              );
+
+          '''
+
+          s = s.replace(
+              marker,
+              diagnostic + marker,
+              1
+          )
+
+          p.write_text(
+              s,
+              encoding="utf-8"
+          )
+
+          print(
+              "Diagnostic Meteo World ajoute."
+          )
+
+          PY
+
+
+      # ============================================================
+      # COMPILATION DEBUFRIZER
+      # ============================================================
+
+      - name: Compiler debufrizer
+        run: |
+
+          cd debufrizer
+
+          mkdir -p build
+
+          cd build
+
+          cmake .. \
+            -DCMAKE_CXX_COMPILER=g++-14
+
+          make -j2
+
+          echo ""
+          echo "=============================================="
+          echo "COMPILATION TERMINEE"
+          echo "=============================================="
+
+          ls -lh
+
+
+      # ============================================================
+      # FRAMES DEJA PRESENTES SUR INFOMANIAK
+      # ============================================================
+
+      - name: Lire les frames deja publiees
+        timeout-minutes: 2
+        env:
+          FTP_HOST: ${{ secrets.INFOMANIAK_SFTP_HOST }}
+          FTP_USER: ${{ secrets.INFOMANIAK_SFTP_USER }}
+          FTP_PASSWORD: ${{ secrets.INFOMANIAK_SFTP_PASSWORD }}
+        run: |
+          {
+            echo "set cmd:fail-exit yes"
+            echo "set ftp:ssl-allow no"
+            echo "set ftp:passive-mode yes"
+            echo "set net:timeout 15"
+            echo "set net:max-retries 2"
+            echo "set cmd:fail-exit no"
+            echo "cls -1 frames/radar-*.png"
+            echo "bye"
+          } > ftp-list-before.txt
+
+          lftp -u "$FTP_USER","$FTP_PASSWORD" "$FTP_HOST" < ftp-list-before.txt > remote-frames-before.txt || true
+
+          echo "Frames deja publiees :"
+          cat remote-frames-before.txt || true
+
+      # ============================================================
+      # DECODAGE DES IMFR27 RECENTS
+      # ============================================================
+
+      - name: Decoder les IMFR27 recents et creer les frames
+        run: |
+          set -e
+
+          mkdir -p output
+          mkdir -p data/generated-frames
+
+          python <<'PY'
+          import json
+          from pathlib import Path
+
+          items = json.loads(
+              Path("data/imfr27-candidates.json").read_text(encoding="utf-8")
+          )
+
+          # Publier TOUTES les nouvelles images disponibles à chaque exécution.
+          # Ainsi le radar rattrape immédiatement le produit Météo-France le plus récent.
+          import re
+          from datetime import datetime
+
+          items = sorted(items, key=lambda item: item["datetime"])
+
+          remote_names = set()
+          remote_file = Path("remote-frames-before.txt")
+
+          if remote_file.exists():
+              for line in remote_file.read_text(
+                  encoding="utf-8",
+                  errors="ignore"
+              ).splitlines():
+                  name = line.strip().replace("\\", "/").rsplit("/", 1)[-1]
+                  if re.fullmatch(r"radar-\d{8}-\d{4}\.png", name):
+                      remote_names.add(name)
+
+          selected = []
+
+          for item in items:
+              dt = item["datetime"]
+              parsed = datetime.fromisoformat(dt.replace("Z", "+00:00"))
+              filename = "radar-" + parsed.strftime("%Y%m%d-%H%M") + ".png"
+
+              already = filename in remote_names
+              print("Candidat :", dt, "->", filename,
+                    "DEJA PUBLIE" if already else "NOUVEAU")
+
+              if not already:
+                  selected.append(item)
+
+          Path("data/imfr27-list.txt").write_text(
+              "".join(item["bufr_file"] + "\n" for item in selected),
+              encoding="utf-8"
+          )
+
+          print("IMFR27 disponibles :", len(items))
+          print("Nouvelles frames a traiter :", len(selected))
+          if selected:
+              print("Premiere nouvelle date :", selected[0]["datetime"])
+              print("Derniere nouvelle date :", selected[-1]["datetime"])
+          else:
+              print("Aucune nouvelle frame IMFR27 a publier sur ce passage.")
+          PY
+
+          while IFS= read -r BUFR || [ -n "$BUFR" ]; do
+            [ -z "$BUFR" ] && continue
+
+            BASE="$(basename "$BUFR" .bufr)"
+            STAMP="${BASE#imfr27-}"
+
+            echo ""
+            echo "=============================================="
+            echo "TRAITEMENT $STAMP"
+            echo "=============================================="
+
+            rm -f debufrizer/examples/radar_*.tif
+            rm -f output/radar_*.tif
+            rm -f output/radar-latest.tif
+            rm -f output/radar-latest-3857.tif
+
+            cp "$BUFR" debufrizer/examples/latest-imfr27.bufr
+
+            (
+              cd debufrizer/examples
+              ../build/debufrizer \
+                latest-imfr27.bufr \
+                radar_ \
+                > ../../debufrizer-imfr27.log 2>&1
+            )
+
+            TIFF=$(find debufrizer/examples \
+              -type f \
+              -name "radar_*.tif" \
+              | sort \
+              | tail -n 1)
+
+            if [ -z "$TIFF" ]; then
+              echo "ERREUR : aucun TIFF pour $STAMP"
+              exit 1
+            fi
+
+            cp "$TIFF" output/radar-latest.tif
+
+            # IMPORTANT :
+            # create_radar_png.py lit data/latest-imfr27.json pour dater la frame.
+            # On met donc temporairement ce JSON sur le BUFR actuellement traité.
+            python - "$STAMP" <<'PYFRAME'
+          import json
+          import sys
+          from datetime import datetime, timezone
+          from pathlib import Path
+
+          stamp = sys.argv[1]
+          dt = datetime.strptime(stamp, "%Y%m%d-%H%M").replace(tzinfo=timezone.utc)
+
+          path = Path("data/latest-imfr27.json")
+          info = json.loads(path.read_text(encoding="utf-8"))
+          info["observation_time_utc"] = dt.isoformat().replace("+00:00", "Z")
+          info["source_file"] = "T_IMFR27_C_LFPW_" + dt.strftime("%Y%m%d%H%M%S") + ".bufr.gz"
+
+          path.write_text(
+              json.dumps(info, indent=2, ensure_ascii=False),
+              encoding="utf-8"
+          )
+
+          print("Date injectée pour la frame :", info["observation_time_utc"])
+          PYFRAME
+
+            python create_radar_png.py
+
+            if [ ! -f data/frame-radar.png ]; then
+              echo "ERREUR : frame-radar.png absente pour $STAMP"
+              exit 1
+            fi
+
+            cp data/frame-radar.png "data/generated-frames/radar-$STAMP.png"
+
+            echo "Frame créée : radar-$STAMP.png"
+
+          done < data/imfr27-list.txt
+
+          echo ""
+          echo "Frames générées :"
+          ls -lh data/generated-frames/
+
+          # Remettre latest-imfr27.json sur le produit réellement le plus récent.
+          python <<'PYRESTORE'
+          import json
+          from pathlib import Path
+
+          candidates = json.loads(
+              Path("data/imfr27-candidates.json").read_text(encoding="utf-8")
+          )
+          latest = sorted(candidates, key=lambda item: item["datetime"])[-1]
+
+          path = Path("data/latest-imfr27.json")
+          info = json.loads(path.read_text(encoding="utf-8"))
+          info["source_file"] = latest["source_file"]
+          info["observation_time_utc"] = latest["datetime"]
+
+          path.write_text(
+              json.dumps(info, indent=2, ensure_ascii=False),
+              encoding="utf-8"
+          )
+
+          print("Dernière date radar restaurée :", latest["datetime"])
+          PYRESTORE
+
+      # ============================================================
+      # VERIFICATION DU DERNIER RADAR
+      # ============================================================
+
+      - name: Verifier radar final
+        run: |
+          test -f data/radar-latest.png
+          test -f data/radar-latest.json
+          test -f data/frame-radar.png
+          test -f data/frame-info.json
+
+          python <<'PY'
+          import json
+          from pathlib import Path
+
+          data = json.loads(
+              Path("data/radar-latest.json").read_text(encoding="utf-8")
+          )
+
+          print("Projection :", data.get("projection"))
+          print("Bounds :", data.get("bounds"))
+
+          if data.get("projection") != "EPSG:3857":
+              raise SystemExit(
+                  "ERREUR : le radar final n'est pas en EPSG:3857."
+              )
+          PY
+
+
+      # ============================================================
+      # HISTORIQUE RADAR 2 HEURES + ENVOI FTP INFOMANIAK
+      # Le compte FTP arrive directement dans /cartes/radar/
+      # ============================================================
+
+      - name: Preparer historique radar
+        run: |
+          python <<'PY'
+          import json
+          from pathlib import Path
+
+          info = json.loads(
+              Path("data/frame-info.json").read_text(encoding="utf-8")
+          )
+
+          Path("data/frame-filename.txt").write_text(
+              info["filename"],
+              encoding="utf-8"
+          )
+
+          print("Dernière frame :", info["filename"])
+          print("Date radar :", info["datetime"])
+          PY
+
+      - name: Envoyer radar et toutes les frames vers Infomaniak
+        timeout-minutes: 4
+        env:
+          FTP_HOST: ${{ secrets.INFOMANIAK_SFTP_HOST }}
+          FTP_USER: ${{ secrets.INFOMANIAK_SFTP_USER }}
+          FTP_PASSWORD: ${{ secrets.INFOMANIAK_SFTP_PASSWORD }}
+        run: |
+          {
+            echo "set cmd:fail-exit yes"
+            echo "set ftp:ssl-allow no"
+            echo "set ftp:passive-mode yes"
+            echo "set net:timeout 15"
+            echo "set net:reconnect-interval-base 5"
+            echo "set net:reconnect-interval-max 10"
+            echo "set net:max-retries 2"
+
+            echo "set cmd:fail-exit no"
+            echo "mkdir frames"
+            echo "set cmd:fail-exit yes"
+
+            echo "put data/radar-latest.png -o radar-latest.png"
+            echo "put data/radar-latest.json -o radar-latest.json"
+
+            for FRAME in data/generated-frames/radar-*.png; do
+              [ -f "$FRAME" ] || continue
+              NAME="$(basename "$FRAME")"
+              printf 'put "%s" -o "frames/%s"\n' "$FRAME" "$NAME"
+            done
+
+            echo "cls -1 frames/radar-*.png > remote-frames.txt"
+            echo "bye"
+          } > ftp-upload.txt
+
+          timeout 210s lftp -u "$FTP_USER","$FTP_PASSWORD" "$FTP_HOST" < ftp-upload.txt
+
+          RESULT=$?
+          if [ "$RESULT" -eq 124 ]; then
+            echo "ERREUR : delai FTP depasse."
+            exit 1
+          fi
+          if [ "$RESULT" -ne 0 ]; then
+            echo "ERREUR FTP : code $RESULT"
+            exit "$RESULT"
+          fi
+
+      - name: Creer manifest 2 heures
+        run: |
+          python <<'PY'
+          import json, re
+          from datetime import datetime, timezone
+          from pathlib import Path
+
+          latest = json.loads(Path("data/radar-latest.json").read_text(encoding="utf-8"))
+          names = []
+
+          f = Path("remote-frames.txt")
+          if f.exists():
+              for line in f.read_text(encoding="utf-8", errors="ignore").splitlines():
+                  name = line.strip().replace("\\", "/").rsplit("/", 1)[-1]
+                  if re.fullmatch(r"radar-\d{8}-\d{4}\.png", name):
+                      names.append(name)
+
+          # Ajouter aussi les frames créées pendant CETTE exécution.
+          # Ainsi le manifest ne peut jamais rester bloqué sur une ancienne
+          # image si la liste FTP n'a pas encore renvoyé le nouveau fichier.
+          generated_dir = Path("data/generated-frames")
+          if generated_dir.exists():
+              for local_frame in generated_dir.glob("radar-*.png"):
+                  name = local_frame.name
+                  if re.fullmatch(r"radar-\d{8}-\d{4}\.png", name):
+                      names.append(name)
+
+          names = sorted(set(names))
+          keep = names[-24:]
+          delete = names[:-24]
+          frames = []
+
+          for name in keep:
+              m = re.fullmatch(r"radar-(\d{8})-(\d{4})\.png", name)
+              dt = datetime.strptime(m.group(1)+m.group(2), "%Y%m%d%H%M").replace(tzinfo=timezone.utc)
+              frames.append({
+                  "filename": name,
+                  "url": "frames/" + name,
+                  "datetime": dt.isoformat().replace("+00:00", "Z")
+              })
+
+          manifest = {
+              "projection": "EPSG:3857",
+              "bounds": latest.get("bounds"),
+              "count": len(frames),
+              "max_frames": 24,
+              "interval_minutes": 5,
+              "history_hours": 2,
+              "latest_datetime": frames[-1]["datetime"] if frames else latest.get("datetime"),
+              "frames": frames
+          }
+
+          Path("data/manifest.json").write_text(
+              json.dumps(manifest, indent=2, ensure_ascii=False),
+              encoding="utf-8"
+          )
+          Path("frames-to-delete.txt").write_text("\n".join(delete), encoding="utf-8")
+
+          print("Frames trouvees :", len(names))
+          print("Frames conservees :", len(keep))
+          print("Frames a supprimer :", len(delete))
+          PY
+
+      - name: Nettoyer anciennes frames et envoyer manifest
+        timeout-minutes: 2
+        env:
+          FTP_HOST: ${{ secrets.INFOMANIAK_SFTP_HOST }}
+          FTP_USER: ${{ secrets.INFOMANIAK_SFTP_USER }}
+          FTP_PASSWORD: ${{ secrets.INFOMANIAK_SFTP_PASSWORD }}
+        run: |
+          {
+            echo "set cmd:fail-exit yes"
+            echo "set ftp:ssl-allow no"
+            echo "set ftp:passive-mode yes"
+            echo "set net:timeout 15"
+            echo "set net:reconnect-interval-base 5"
+            echo "set net:reconnect-interval-max 10"
+            echo "set net:max-retries 2"
+            echo "put data/manifest.json -o manifest.json"
+
+            if [ -s frames-to-delete.txt ]; then
+              while IFS= read -r OLD_FRAME; do
+                [ -n "$OLD_FRAME" ] && printf 'rm frames/%s\n' "$OLD_FRAME"
+              done < frames-to-delete.txt
+            fi
+
+            echo "cls -l frames"
+            echo "bye"
+          } > ftp-cleanup.txt
+
+          timeout 90s lftp -u "$FTP_USER","$FTP_PASSWORD" "$FTP_HOST" < ftp-cleanup.txt
+
+          RESULT=$?
+          if [ "$RESULT" -eq 124 ]; then
+            echo "ERREUR : delai FTP depasse."
+            exit 1
+          fi
+          if [ "$RESULT" -ne 0 ]; then
+            echo "ERREUR FTP : code $RESULT"
+            exit "$RESULT"
+          fi
+
+          echo "RADAR + HISTORIQUE 2H ENVOYES AVEC SUCCES"
+
+
+      # ============================================================
+      # ARTIFACT GITHUB
+      # ============================================================
+
+      - name: Sauvegarder diagnostic
+        if: always()
+
+        uses: actions/upload-artifact@v4
+
+        with:
+
+          name: radar-diagnostic
+
+          retention-days: 1
+
+          if-no-files-found: warn
+
+          path: |
+            debufrizer-imfr27.log
+            output/radar-latest.tif
+            output/radar-latest-3857.tif
+            data/radar-latest.png
+            data/radar-latest.json
+            data/frame-radar.png
+            data/frame-info.json
+            data/manifest.json
+            data/latest-imfr27.json
+            data/imfr27-candidates.json
+            data/generated-frames/
+            remote-frames.txt
+            frames-to-delete.txt
