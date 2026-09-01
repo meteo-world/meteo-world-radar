@@ -125,26 +125,16 @@ jobs:
 
           from pathlib import Path
 
-          p = Path(
-              "debufrizer/section3and4.cpp"
-          )
+          p = Path("debufrizer/section3and4.cpp")
 
-          s = p.read_text(
-              encoding="utf-8"
-          )
+          s = p.read_text(encoding="utf-8")
 
-
-          marker = (
-              "OGRSpatialReference projection;"
-          )
-
+          marker = "OGRSpatialReference projection;"
 
           if marker not in s:
-
               raise SystemExit(
                   "ERREUR : emplacement projection introuvable"
               )
-
 
           diagnostic = r'''
 
@@ -187,29 +177,24 @@ jobs:
 
           '''
 
-
           s = s.replace(
               marker,
               diagnostic + marker,
               1
           )
 
-
           p.write_text(
               s,
               encoding="utf-8"
           )
 
-
-          print(
-              "Diagnostic Meteo World ajoute."
-          )
+          print("Diagnostic Meteo World ajoute.")
 
           PY
 
 
       # ============================================================
-      # COMPILATION DEBUFRIZER
+      # COMPILATION
       # ============================================================
 
       - name: Compiler debufrizer
@@ -218,14 +203,12 @@ jobs:
           cd debufrizer
 
           mkdir -p build
-
           cd build
 
           cmake .. \
             -DCMAKE_CXX_COMPILER=g++-14
 
           make -j2
-
 
           echo ""
           echo "=============================================="
@@ -236,7 +219,7 @@ jobs:
 
 
       # ============================================================
-      # DECODAGE BUFR
+      # DECODAGE IMFR27
       # ============================================================
 
       - name: Decoder IMFR27
@@ -246,14 +229,11 @@ jobs:
             data/latest-imfr27.bufr \
             debufrizer/examples/latest-imfr27.bufr
 
-
           cd debufrizer/examples
-
 
           echo "=============================================="
           echo "DECODAGE IMFR27"
           echo "=============================================="
-
 
           ../build/debufrizer \
             latest-imfr27.bufr \
@@ -261,18 +241,16 @@ jobs:
             2>&1 \
             | tee ../../debufrizer-imfr27.log
 
-
           echo ""
           echo "=============================================="
           echo "FICHIERS PRODUITS"
           echo "=============================================="
 
-
           ls -lh
 
 
       # ============================================================
-      # AFFICHAGE DIAGNOSTIC
+      # DIAGNOSTIC
       # ============================================================
 
       - name: Afficher diagnostic projection IMFR27
@@ -282,7 +260,6 @@ jobs:
           echo "RESULTAT DIAGNOSTIC METEO WORLD"
           echo "===================================================="
 
-
           grep \
             -A 10 \
             -B 2 \
@@ -290,12 +267,10 @@ jobs:
             debufrizer-imfr27.log \
             || true
 
-
           echo ""
           echo "===================================================="
           echo "DESCRIPTEURS GEOGRAPHIQUES IMFR27"
           echo "===================================================="
-
 
           grep -iE \
             "029002|029001|030021|030022|005033|006033|029192|005001|006001|005195|006198" \
@@ -304,7 +279,7 @@ jobs:
 
 
       # ============================================================
-      # RECUPERATION DU GEOTIFF
+      # RECUPERATION TIFF
       # ============================================================
 
       - name: Recuperer TIFF
@@ -312,21 +287,17 @@ jobs:
 
           mkdir -p output
 
-
           find debufrizer/examples \
             -type f \
             -name "radar_*.tif" \
             -exec cp {} output/ \;
-
 
           echo ""
           echo "=============================================="
           echo "TIFF DISPONIBLES"
           echo "=============================================="
 
-
           ls -lh output/
-
 
           TIFF=$(find output \
             -type f \
@@ -334,26 +305,19 @@ jobs:
             | sort \
             | tail -n 1)
 
-
           if [ -z "$TIFF" ]; then
-
               echo "ERREUR : aucun TIFF radar."
               exit 1
-
           fi
-
 
           echo ""
           echo "TIFF selectionne : $TIFF"
 
-
-          cp \
-            "$TIFF" \
-            output/radar-latest.tif
+          cp "$TIFF" output/radar-latest.tif
 
 
       # ============================================================
-      # EXAMEN GEOTIFF ORIGINAL
+      # EXAMEN TIFF SOURCE
       # ============================================================
 
       - name: Examiner GeoTIFF original
@@ -363,17 +327,14 @@ jobs:
           echo "GEOTIFF ORIGINAL DEBUFRIZER"
           echo "===================================================="
 
-
           gdalinfo \
             -stats \
             output/radar-latest.tif
-
 
           echo ""
           echo "===================================================="
           echo "PROJECTION SOURCE"
           echo "===================================================="
-
 
           gdalsrsinfo \
             output/radar-latest.tif \
@@ -381,7 +342,7 @@ jobs:
 
 
       # ============================================================
-      # COORDONNEES GEOTIFF ORIGINAL
+      # COORDONNEES
       # ============================================================
 
       - name: Afficher coordonnees GeoTIFF
@@ -391,7 +352,6 @@ jobs:
           echo "ORIGINE / PIXELS / COINS"
           echo "===================================================="
 
-
           gdalinfo \
             output/radar-latest.tif \
             | grep -E \
@@ -400,18 +360,7 @@ jobs:
 
 
       # ============================================================
-      # CREATION PNG
-      #
-      # create_radar_png.py :
-      #
-      # GeoTIFF polaire
-      #        |
-      #        v
-      # EPSG:3857
-      #        |
-      #        v
-      # PNG RGBA
-      #
+      # CREATION PNG EPSG:3857
       # ============================================================
 
       - name: Creer PNG radar EPSG 3857
@@ -421,57 +370,46 @@ jobs:
           echo "CREATION RADAR EPSG:3857"
           echo "===================================================="
 
-
           python create_radar_png.py
-
 
           echo ""
           echo "=============================================="
           echo "CONTENU OUTPUT"
           echo "=============================================="
 
-
           ls -lh output/
-
 
           echo ""
           echo "=============================================="
           echo "CONTENU DATA"
           echo "=============================================="
 
-
           ls -lh data/
 
 
       # ============================================================
-      # VERIFICATION DU TIFF 3857
+      # VERIFICATION TIFF 3857
       # ============================================================
 
       - name: Examiner GeoTIFF EPSG 3857
         run: |
 
           if [ ! -f output/radar-latest-3857.tif ]; then
-
               echo "ERREUR : radar-latest-3857.tif absent."
               exit 1
-
           fi
-
 
           echo "===================================================="
           echo "GEOTIFF EPSG:3857"
           echo "===================================================="
 
-
           gdalinfo \
             output/radar-latest-3857.tif
-
 
           echo ""
           echo "===================================================="
           echo "PROJECTION EPSG:3857"
           echo "===================================================="
-
 
           gdalsrsinfo \
             output/radar-latest-3857.tif \
@@ -479,49 +417,38 @@ jobs:
 
 
       # ============================================================
-      # VERIFICATION PNG / JSON
+      # VERIFICATION PNG + JSON
       # ============================================================
 
       - name: Verifier radar final
         run: |
 
           if [ ! -f data/radar-latest.png ]; then
-
               echo "ERREUR : radar-latest.png absent."
               exit 1
-
           fi
-
 
           if [ ! -f data/radar-latest.json ]; then
-
               echo "ERREUR : radar-latest.json absent."
               exit 1
-
           fi
-
 
           echo "===================================================="
           echo "PNG FINAL"
           echo "===================================================="
 
-
-          file \
-            data/radar-latest.png
-
+          file data/radar-latest.png
 
           echo ""
           echo "===================================================="
           echo "JSON FINAL"
           echo "===================================================="
 
-
-          cat \
-            data/radar-latest.json
+          cat data/radar-latest.json
 
 
       # ============================================================
-      # VERIFICATION PROJECTION JSON
+      # VERIFICATION PROJECTION
       # ============================================================
 
       - name: Verifier projection JSON
@@ -532,93 +459,103 @@ jobs:
           import json
           from pathlib import Path
 
-
-          path = Path(
-              "data/radar-latest.json"
-          )
-
+          path = Path("data/radar-latest.json")
 
           data = json.loads(
-              path.read_text(
-                  encoding="utf-8"
-              )
+              path.read_text(encoding="utf-8")
           )
-
 
           print(
               "Projection :",
               data.get("projection")
           )
 
-
           print(
               "Bounds :",
               data.get("bounds")
           )
 
-
           if data.get("projection") != "EPSG:3857":
-
               raise SystemExit(
                   "ERREUR : le radar final n'est pas en EPSG:3857."
               )
 
-
-          print(
-              "Radar EPSG:3857 : OK"
-          )
+          print("Radar EPSG:3857 : OK")
 
           PY
 
 
       # ============================================================
-      # ENVOI FTP INFOMANIAK
+      # FTP INFOMANIAK
       # ============================================================
 
       - name: Envoyer radar vers Infomaniak
+        timeout-minutes: 2
+
         env:
 
           FTP_HOST: ${{ secrets.INFOMANIAK_SFTP_HOST }}
-
           FTP_USER: ${{ secrets.INFOMANIAK_SFTP_USER }}
-
           FTP_PASSWORD: ${{ secrets.INFOMANIAK_SFTP_PASSWORD }}
-
           FTP_PATH: ${{ secrets.INFOMANIAK_SFTP_PATH }}
-
 
         run: |
 
           echo "===================================================="
-          echo "ENVOI RADAR VERS INFOMANIAK"
+          echo "CONNEXION FTP INFOMANIAK"
           echo "===================================================="
 
+          echo "Serveur : $FTP_HOST"
+          echo "Dossier : $FTP_PATH"
 
-          lftp \
+          timeout 90s lftp \
             -u "$FTP_USER","$FTP_PASSWORD" \
             "$FTP_HOST" <<EOF
 
+          set cmd:fail-exit yes
+
           set ftp:ssl-allow no
-          set net:max-retries 3
-          set net:timeout 20
+          set ftp:passive-mode yes
+
+          set net:timeout 15
+          set net:reconnect-interval-base 5
+          set net:reconnect-interval-max 10
+          set net:max-retries 2
+
+          echo "Connexion FTP OK"
 
           cd "$FTP_PATH"
 
-          put \
-            data/radar-latest.png \
-            -o radar-latest.png
+          echo "Dossier distant OK"
 
-          put \
-            data/radar-latest.json \
-            -o radar-latest.json
+          put data/radar-latest.png -o radar-latest.png
+
+          echo "PNG envoye"
+
+          put data/radar-latest.json -o radar-latest.json
+
+          echo "JSON envoye"
 
           bye
 
           EOF
 
+          RESULT=$?
+
+          if [ "$RESULT" -eq 124 ]; then
+              echo "ERREUR : connexion FTP bloquee pendant plus de 90 secondes."
+              exit 1
+          fi
+
+          if [ "$RESULT" -ne 0 ]; then
+              echo "ERREUR FTP - code $RESULT"
+              exit "$RESULT"
+          fi
 
           echo ""
-          echo "Radar envoye sur Infomaniak."
+          echo "=============================================="
+          echo "RADAR ENVOYE SUR INFOMANIAK"
+          echo "=============================================="
 
 
       # ============================================================
@@ -626,6 +563,8 @@ jobs:
       # ============================================================
 
       - name: Sauvegarder diagnostic
+        if: always()
+
         uses: actions/upload-artifact@v4
 
         with:
@@ -634,16 +573,12 @@ jobs:
 
           retention-days: 1
 
+          if-no-files-found: warn
+
           path: |
-
             debufrizer-imfr27.log
-
             output/radar-latest.tif
-
             output/radar-latest-3857.tif
-
             data/radar-latest.png
-
             data/radar-latest.json
-
             data/latest-imfr27.json
