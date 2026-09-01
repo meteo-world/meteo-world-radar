@@ -6,6 +6,7 @@ on:
   schedule:
     - cron: "2-57/5 * * * *"
 
+
 jobs:
 
   radar:
@@ -89,7 +90,7 @@ jobs:
 
 
       # ============================================================
-      # DIAGNOSTIC CODE SOURCE
+      # DIAGNOSTIC SOURCE
       # ============================================================
 
       - name: Examiner code grille BUFR
@@ -127,11 +128,14 @@ jobs:
 
           p = Path("debufrizer/section3and4.cpp")
 
-          s = p.read_text(encoding="utf-8")
+          s = p.read_text(
+              encoding="utf-8"
+          )
 
           marker = "OGRSpatialReference projection;"
 
           if marker not in s:
+
               raise SystemExit(
                   "ERREUR : emplacement projection introuvable"
               )
@@ -188,13 +192,15 @@ jobs:
               encoding="utf-8"
           )
 
-          print("Diagnostic Meteo World ajoute.")
+          print(
+              "Diagnostic Meteo World ajoute."
+          )
 
           PY
 
 
       # ============================================================
-      # COMPILATION
+      # COMPILATION DEBUFRIZER
       # ============================================================
 
       - name: Compiler debufrizer
@@ -203,6 +209,7 @@ jobs:
           cd debufrizer
 
           mkdir -p build
+
           cd build
 
           cmake .. \
@@ -250,7 +257,7 @@ jobs:
 
 
       # ============================================================
-      # DIAGNOSTIC
+      # AFFICHAGE DIAGNOSTIC
       # ============================================================
 
       - name: Afficher diagnostic projection IMFR27
@@ -279,7 +286,7 @@ jobs:
 
 
       # ============================================================
-      # RECUPERATION TIFF
+      # RECUPERATION DU TIFF
       # ============================================================
 
       - name: Recuperer TIFF
@@ -306,18 +313,22 @@ jobs:
             | tail -n 1)
 
           if [ -z "$TIFF" ]; then
+
               echo "ERREUR : aucun TIFF radar."
               exit 1
+
           fi
 
           echo ""
           echo "TIFF selectionne : $TIFF"
 
-          cp "$TIFF" output/radar-latest.tif
+          cp \
+            "$TIFF" \
+            output/radar-latest.tif
 
 
       # ============================================================
-      # EXAMEN TIFF SOURCE
+      # EXAMEN DU TIFF ORIGINAL
       # ============================================================
 
       - name: Examiner GeoTIFF original
@@ -342,7 +353,7 @@ jobs:
 
 
       # ============================================================
-      # COORDONNEES
+      # COORDONNEES DU TIFF ORIGINAL
       # ============================================================
 
       - name: Afficher coordonnees GeoTIFF
@@ -388,15 +399,17 @@ jobs:
 
 
       # ============================================================
-      # VERIFICATION TIFF 3857
+      # VERIFICATION TIFF EPSG:3857
       # ============================================================
 
       - name: Examiner GeoTIFF EPSG 3857
         run: |
 
           if [ ! -f output/radar-latest-3857.tif ]; then
+
               echo "ERREUR : radar-latest-3857.tif absent."
               exit 1
+
           fi
 
           echo "===================================================="
@@ -424,31 +437,37 @@ jobs:
         run: |
 
           if [ ! -f data/radar-latest.png ]; then
+
               echo "ERREUR : radar-latest.png absent."
               exit 1
+
           fi
 
           if [ ! -f data/radar-latest.json ]; then
+
               echo "ERREUR : radar-latest.json absent."
               exit 1
+
           fi
 
           echo "===================================================="
           echo "PNG FINAL"
           echo "===================================================="
 
-          file data/radar-latest.png
+          file \
+            data/radar-latest.png
 
           echo ""
           echo "===================================================="
           echo "JSON FINAL"
           echo "===================================================="
 
-          cat data/radar-latest.json
+          cat \
+            data/radar-latest.json
 
 
       # ============================================================
-      # VERIFICATION PROJECTION
+      # VERIFICATION PROJECTION JSON
       # ============================================================
 
       - name: Verifier projection JSON
@@ -459,10 +478,14 @@ jobs:
           import json
           from pathlib import Path
 
-          path = Path("data/radar-latest.json")
+          path = Path(
+              "data/radar-latest.json"
+          )
 
           data = json.loads(
-              path.read_text(encoding="utf-8")
+              path.read_text(
+                  encoding="utf-8"
+              )
           )
 
           print(
@@ -476,17 +499,24 @@ jobs:
           )
 
           if data.get("projection") != "EPSG:3857":
+
               raise SystemExit(
                   "ERREUR : le radar final n'est pas en EPSG:3857."
               )
 
-          print("Radar EPSG:3857 : OK")
+          print(
+              "Radar EPSG:3857 : OK"
+          )
 
           PY
 
 
       # ============================================================
-      # FTP INFOMANIAK
+      # ENVOI FTP INFOMANIAK
+      #
+      # IMPORTANT :
+      # Le compte FTP est deja positionne dans /cartes/radar/
+      # Il ne faut donc faire AUCUN cd.
       # ============================================================
 
       - name: Envoyer radar vers Infomaniak
@@ -495,18 +525,16 @@ jobs:
         env:
 
           FTP_HOST: ${{ secrets.INFOMANIAK_SFTP_HOST }}
+
           FTP_USER: ${{ secrets.INFOMANIAK_SFTP_USER }}
+
           FTP_PASSWORD: ${{ secrets.INFOMANIAK_SFTP_PASSWORD }}
-          FTP_PATH: ${{ secrets.INFOMANIAK_SFTP_PATH }}
 
         run: |
 
           echo "===================================================="
-          echo "CONNEXION FTP INFOMANIAK"
+          echo "ENVOI RADAR VERS INFOMANIAK"
           echo "===================================================="
-
-          echo "Serveur : $FTP_HOST"
-          echo "Dossier : $FTP_PATH"
 
           timeout 90s lftp \
             -u "$FTP_USER","$FTP_PASSWORD" \
@@ -515,26 +543,44 @@ jobs:
           set cmd:fail-exit yes
 
           set ftp:ssl-allow no
+
           set ftp:passive-mode yes
 
           set net:timeout 15
+
           set net:reconnect-interval-base 5
+
           set net:reconnect-interval-max 10
+
           set net:max-retries 2
 
           echo "Connexion FTP OK"
 
-          cd "$FTP_PATH"
+          pwd
 
-          echo "Dossier distant OK"
+          echo "Contenu du dossier distant :"
 
-          put data/radar-latest.png -o radar-latest.png
+          cls -l
+
+          echo "Envoi radar-latest.png..."
+
+          put \
+            data/radar-latest.png \
+            -o radar-latest.png
 
           echo "PNG envoye"
 
-          put data/radar-latest.json -o radar-latest.json
+          echo "Envoi radar-latest.json..."
+
+          put \
+            data/radar-latest.json \
+            -o radar-latest.json
 
           echo "JSON envoye"
+
+          echo "Verification fichiers distants :"
+
+          cls -l
 
           bye
 
@@ -543,18 +589,24 @@ jobs:
           RESULT=$?
 
           if [ "$RESULT" -eq 124 ]; then
-              echo "ERREUR : connexion FTP bloquee pendant plus de 90 secondes."
+
+              echo ""
+              echo "ERREUR : delai FTP depasse apres 90 secondes."
               exit 1
+
           fi
 
           if [ "$RESULT" -ne 0 ]; then
-              echo "ERREUR FTP - code $RESULT"
+
+              echo ""
+              echo "ERREUR FTP : code $RESULT"
               exit "$RESULT"
+
           fi
 
           echo ""
           echo "=============================================="
-          echo "RADAR ENVOYE SUR INFOMANIAK"
+          echo "RADAR ENVOYE AVEC SUCCES SUR INFOMANIAK"
           echo "=============================================="
 
 
