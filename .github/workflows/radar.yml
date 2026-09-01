@@ -29,17 +29,17 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Installer les dependances Python
+      - name: Installer dependances Python
         run: |
           python -m pip install --upgrade pip
           pip install requests numpy pillow
 
 
       # ============================================================
-      # RADAR METEO-FRANCE
+      # TELECHARGEMENT RADAR
       # ============================================================
 
-      - name: Telecharger le radar Meteo-France
+      - name: Telecharger radar Meteo-France
         env:
           METEOFRANCE_RADAR_API_KEY: ${{ secrets.METEOFRANCE_RADAR_API_KEY }}
         run: |
@@ -50,7 +50,7 @@ jobs:
       # OUTILS
       # ============================================================
 
-      - name: Installer les outils
+      - name: Installer outils
         run: |
           sudo apt-get update
 
@@ -81,67 +81,82 @@ jobs:
 
 
       # ============================================================
-      # DIAGNOSTIC DU CODE DEBUFRIZER
+      # DIAGNOSTIC SOURCE AVANT MODIFICATION
       # ============================================================
 
-      - name: Examiner la projection utilisee par debufrizer
+      - name: Examiner code grille BUFR
         run: |
           echo "===================================================="
-          echo "RECHERCHE DES PARAMETRES DE PROJECTION DEBUFRIZER"
+          echo "CODE DEBUFRIZER - GRILLE IMFR27"
+          echo "===================================================="
+
+          sed -n '430,555p' debufrizer/section3and4.cpp
+
+          echo ""
+          echo "===================================================="
+          echo "DESCRIPTEURS METEO-FRANCE"
           echo "===================================================="
 
           grep -RniE \
-            "stereo|stereographic|projection|proj4|latitude|longitude|parallel|easting|northing|orientation|WGS" \
+            "005195|006198|005001|006001|005033|006033|030021|030022|029001|029192" \
             debufrizer \
             --exclude-dir=.git \
             || true
 
-          echo ""
-          echo "===================================================="
-          echo "CODE SECTION3AND4"
-          echo "===================================================="
-
-          grep -n -A 30 -B 30 \
-            "SetPS" \
-            debufrizer/section3and4.cpp \
-            || true
-
 
       # ============================================================
-      # AJOUT DU DIAGNOSTIC METEO WORLD
+      # AJOUT DIAGNOSTIC DES VALEURS BUFR
       # ============================================================
 
-      - name: Ajouter diagnostic Meteo World
+      - name: Ajouter diagnostic complet IMFR27
         run: |
           python <<'PY'
           from pathlib import Path
 
-          fichier = Path("debufrizer/section3and4.cpp")
+          p = Path("debufrizer/section3and4.cpp")
+          s = p.read_text(encoding="utf-8")
 
-          texte = fichier.read_text(encoding="utf-8")
+          # --------------------------------------------------------
+          # Diagnostic des valeurs que debufrizer a deja extraites
+          # --------------------------------------------------------
 
-          marqueur = "OGRSpatialReference projection;"
+          marker = "OGRSpatialReference projection;"
 
-          if marqueur not in texte:
+          if marker not in s:
               raise SystemExit(
-                  "ERREUR : OGRSpatialReference projection introuvable"
+                  "ERREUR : emplacement projection introuvable"
               )
 
           diagnostic = r'''
 
               std::println(
                   std::cerr,
-                  "=============================================="
+                  ""
               );
 
               std::println(
                   std::cerr,
-                  "METEO WORLD - DIAGNOSTIC GRILLE IMFR27"
+                  "===================================================="
               );
 
               std::println(
                   std::cerr,
-                  "origLatitude = {}",
+                  "METEO WORLD - VALEURS GRILLE IMFR27"
+              );
+
+              std::println(
+                  std::cerr,
+                  "===================================================="
+              );
+
+              std::println(
+                  std::cerr,
+                  "005001/006001 - coin de reference :"
+              );
+
+              std::println(
+                  std::cerr,
+                  "origLatitude  = {}",
                   grid.origLatitude
               );
 
@@ -153,28 +168,38 @@ jobs:
 
               std::println(
                   std::cerr,
-                  "Projection debufrizer = SetPS(45, 0, 1, 0, 0)"
+                  ""
               );
 
               std::println(
                   std::cerr,
-                  "=============================================="
+                  "Projection actuellement imposee par debufrizer :"
+              );
+
+              std::println(
+                  std::cerr,
+                  "SetPS(45, 0, 1, 0, 0)"
+              );
+
+              std::println(
+                  std::cerr,
+                  "===================================================="
               );
 
           '''
 
-          texte = texte.replace(
-              marqueur,
-              diagnostic + marqueur,
+          s = s.replace(
+              marker,
+              diagnostic + marker,
               1
           )
 
-          fichier.write_text(
-              texte,
+          p.write_text(
+              s,
               encoding="utf-8"
           )
 
-          print("Diagnostic Meteo World ajoute.")
+          print("Diagnostic IMFR27 ajoute.")
           PY
 
 
@@ -195,24 +220,28 @@ jobs:
           make -j2
 
           echo ""
-          echo "=== Fichiers compiles ==="
+          echo "======================================"
+          echo "COMPILATION TERMINEE"
+          echo "======================================"
+
           ls -lh
 
 
       # ============================================================
-      # DECODAGE IMFR27
+      # DECODAGE
       # ============================================================
 
       - name: Decoder IMFR27
         run: |
-          cp data/latest-imfr27.bufr \
-             debufrizer/examples/latest-imfr27.bufr
+          cp \
+            data/latest-imfr27.bufr \
+            debufrizer/examples/latest-imfr27.bufr
 
           cd debufrizer/examples
 
-          echo "======================================="
-          echo "DECODAGE COMPLET IMFR27"
-          echo "======================================="
+          echo "======================================"
+          echo "DECODAGE IMFR27"
+          echo "======================================"
 
           ../build/debufrizer \
             latest-imfr27.bufr \
@@ -220,41 +249,98 @@ jobs:
             2>&1 | tee ../../debufrizer-imfr27.log
 
           echo ""
-          echo "=== Fichiers produits ==="
+          echo "======================================"
+          echo "FICHIERS PRODUITS"
+          echo "======================================"
+
           ls -lh
 
 
       # ============================================================
-      # RESULTAT DU DIAGNOSTIC
+      # DIAGNOSTIC 1
       # ============================================================
 
-      - name: Afficher diagnostic projection IMFR27
+      - name: Afficher valeurs grille IMFR27
         run: |
           echo "===================================================="
-          echo "RESULTAT DIAGNOSTIC METEO WORLD"
+          echo "VALEURS GRILLE DECODEES"
           echo "===================================================="
 
-          grep -A 10 -B 2 \
-            "METEO WORLD - DIAGNOSTIC GRILLE IMFR27" \
+          grep -A 20 -B 2 \
+            "METEO WORLD - VALEURS GRILLE IMFR27" \
             debufrizer-imfr27.log \
+            || true
+
+
+      # ============================================================
+      # DIAGNOSTIC 2
+      # ============================================================
+
+      - name: Chercher valeurs projection BUFR
+        run: |
+          echo "===================================================="
+          echo "RECHERCHE PARAMETRES PROJECTION BUFR"
+          echo "===================================================="
+
+          echo ""
+          echo "DESCRIPTEURS RECHERCHES :"
+          echo "005195 = latitude de reference"
+          echo "006198 = meridien parallele axe Y"
+          echo "005001 = latitude"
+          echo "006001 = longitude"
+          echo "005033 = taille pixel horizontal 1"
+          echo "006033 = taille pixel horizontal 2"
+          echo "030021 = pixels par ligne"
+          echo "030022 = pixels par colonne"
+          echo ""
+
+          grep -iE \
+            "005195|006198|005001|006001|005033|006033|030021|030022|referenceLatitude|refLatitude|meridianLongitude|projection" \
+            debufrizer-imfr27.log \
+            || true
+
+
+      # ============================================================
+      # RECHERCHE DANS LES TABLES LOCALES
+      # ============================================================
+
+      - name: Examiner tables locales Meteo-France
+        run: |
+          echo "===================================================="
+          echo "TABLES LOCALES METEO-FRANCE"
+          echo "===================================================="
+
+          find debufrizer/examples/bufr/tables \
+            -type f \
+            -path "*/85/*" \
+            -print
+
+          echo ""
+          echo "===================================================="
+          echo "005195"
+          echo "===================================================="
+
+          grep -Rni \
+            "005195" \
+            debufrizer/examples/bufr/tables \
             || true
 
           echo ""
           echo "===================================================="
-          echo "DESCRIPTEURS GEOGRAPHIQUES IMFR27"
+          echo "006198"
           echo "===================================================="
 
-          grep -iE \
-            "029001|029002|029192|030021|030022|005033|006033|005001|006001|005195|006198" \
-            debufrizer-imfr27.log \
+          grep -Rni \
+            "006198" \
+            debufrizer/examples/bufr/tables \
             || true
 
 
       # ============================================================
-      # RECUPERATION DU TIFF
+      # RECUPERATION TIFF
       # ============================================================
 
-      - name: Recuperer le TIFF genere
+      - name: Recuperer TIFF
         run: |
           mkdir -p output
 
@@ -263,7 +349,10 @@ jobs:
             -name "radar_*.tif" \
             -exec cp {} output/ \;
 
-          echo "=== TIFF disponibles ==="
+          echo "======================================"
+          echo "TIFF DISPONIBLES"
+          echo "======================================"
+
           ls -lh output/
 
           TIFF=$(find output \
@@ -273,23 +362,24 @@ jobs:
             | tail -n 1)
 
           if [ -z "$TIFF" ]; then
-            echo "ERREUR : aucun TIFF radar genere."
+            echo "ERREUR : aucun TIFF radar."
             exit 1
           fi
 
+          echo ""
           echo "TIFF selectionne : $TIFF"
 
           cp "$TIFF" output/radar-latest.tif
 
 
       # ============================================================
-      # DIAGNOSTIC DU GEOTIFF
+      # GDALINFO
       # ============================================================
 
-      - name: Examiner le GeoTIFF produit par debufrizer
+      - name: Examiner GeoTIFF
         run: |
           echo "===================================================="
-          echo "GEOTIFF PRODUIT PAR DEBUFRIZER"
+          echo "GDALINFO COMPLET"
           echo "===================================================="
 
           gdalinfo \
@@ -298,7 +388,7 @@ jobs:
 
           echo ""
           echo "===================================================="
-          echo "SYSTEME DE COORDONNEES"
+          echo "PROJECTION"
           echo "===================================================="
 
           gdalsrsinfo \
@@ -307,42 +397,38 @@ jobs:
 
 
       # ============================================================
-      # COINS DU RASTER
+      # COORDONNEES
       # ============================================================
 
-      - name: Tester les coordonnees du GeoTIFF
+      - name: Afficher coordonnees GeoTIFF
         run: |
           echo "===================================================="
-          echo "COINS DU RASTER"
+          echo "ORIGINE / PIXELS / COINS"
           echo "===================================================="
 
           gdalinfo output/radar-latest.tif \
-            | grep -A 8 "Corner Coordinates"
-
-          echo ""
-          echo "===================================================="
-          echo "CENTRE DU RASTER"
-          echo "===================================================="
-
-          gdalinfo output/radar-latest.tif \
-            | grep "Center" \
+            | grep -E \
+            "Size is|Origin|Pixel Size|Upper Left|Lower Left|Upper Right|Lower Right|Center" \
             || true
 
 
       # ============================================================
-      # PNG RADAR
+      # CREATION PNG
       # ============================================================
 
-      - name: Creer le PNG radar georeference
+      - name: Creer PNG radar
         run: |
           echo "===================================================="
-          echo "CREATION PNG RADAR"
+          echo "CREATION PNG"
           echo "===================================================="
 
           python create_radar_png.py
 
           echo ""
-          echo "=== DATA ==="
+          echo "======================================"
+          echo "CONTENU DATA"
+          echo "======================================"
+
           ls -lh data/
 
 
@@ -350,7 +436,7 @@ jobs:
       # VERIFICATION
       # ============================================================
 
-      - name: Verifier le radar final
+      - name: Verifier radar final
         run: |
           if [ ! -f data/radar-latest.png ]; then
             echo "ERREUR : radar-latest.png absent."
@@ -363,24 +449,24 @@ jobs:
           fi
 
           echo "===================================================="
-          echo "PNG RADAR OK"
+          echo "PNG"
           echo "===================================================="
 
           file data/radar-latest.png
 
           echo ""
           echo "===================================================="
-          echo "JSON / BOUNDS LEAFLET"
+          echo "JSON"
           echo "===================================================="
 
           cat data/radar-latest.json
 
 
       # ============================================================
-      # ENVOI FTP INFOMANIAK
+      # FTP INFOMANIAK
       # ============================================================
 
-      - name: Envoyer le radar vers Infomaniak
+      - name: Envoyer radar vers Infomaniak
         env:
           FTP_HOST: ${{ secrets.INFOMANIAK_SFTP_HOST }}
           FTP_USER: ${{ secrets.INFOMANIAK_SFTP_USER }}
@@ -389,20 +475,29 @@ jobs:
 
         run: |
           echo "===================================================="
-          echo "ENVOI VERS INFOMANIAK"
+          echo "ENVOI INFOMANIAK"
           echo "===================================================="
 
-          lftp -u "$FTP_USER","$FTP_PASSWORD" "$FTP_HOST" <<EOF
+          lftp \
+            -u "$FTP_USER","$FTP_PASSWORD" \
+            "$FTP_HOST" <<EOF
+
           set ftp:ssl-allow no
           set net:max-retries 3
           set net:timeout 20
 
           cd "$FTP_PATH"
 
-          put data/radar-latest.png -o radar-latest.png
-          put data/radar-latest.json -o radar-latest.json
+          put \
+            data/radar-latest.png \
+            -o radar-latest.png
+
+          put \
+            data/radar-latest.json \
+            -o radar-latest.json
 
           bye
+
           EOF
 
           echo ""
@@ -410,10 +505,10 @@ jobs:
 
 
       # ============================================================
-      # SAUVEGARDE DIAGNOSTIC
+      # ARTIFACT
       # ============================================================
 
-      - name: Sauvegarder le diagnostic GitHub
+      - name: Sauvegarder diagnostic
         uses: actions/upload-artifact@v4
         with:
           name: radar-diagnostic
@@ -422,7 +517,6 @@ jobs:
           path: |
             debufrizer-imfr27.log
             output/radar-latest.tif
-            output/radar-latest-4326.tif
             data/radar-latest.png
             data/radar-latest.json
             data/latest-imfr27.json
