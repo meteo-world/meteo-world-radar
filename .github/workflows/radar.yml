@@ -3,13 +3,26 @@ name: Meteo World Radar
 on:
   workflow_dispatch:
 
+  schedule:
+    - cron: "2-57/5 * * * *"
+
 jobs:
   radar:
     runs-on: ubuntu-latest
 
     steps:
+
+      # ============================================================
+      # DEPOT GITHUB
+      # ============================================================
+
       - name: Recuperer le depot
         uses: actions/checkout@v4
+
+
+      # ============================================================
+      # PYTHON
+      # ============================================================
 
       - name: Installer Python
         uses: actions/setup-python@v5
@@ -21,15 +34,26 @@ jobs:
           python -m pip install --upgrade pip
           pip install requests numpy pillow
 
+
+      # ============================================================
+      # TELECHARGEMENT METEO-FRANCE
+      # ============================================================
+
       - name: Telecharger le radar Meteo-France
         env:
           METEOFRANCE_RADAR_API_KEY: ${{ secrets.METEOFRANCE_RADAR_API_KEY }}
         run: |
           python download_radar.py
 
+
+      # ============================================================
+      # OUTILS NECESSAIRES
+      # ============================================================
+
       - name: Installer les outils de decodage
         run: |
           sudo apt-get update
+
           sudo apt-get install -y \
             g++-14 \
             cmake \
@@ -38,10 +62,18 @@ jobs:
             gdal-bin \
             lftp
 
+          echo "=== Versions ==="
+
           g++-14 --version
           cmake --version
           gdal-config --version
           gdalinfo --version
+          lftp --version
+
+
+      # ============================================================
+      # DEBUFRIZER
+      # ============================================================
 
       - name: Recuperer debufrizer
         run: |
@@ -50,6 +82,7 @@ jobs:
       - name: Compiler debufrizer
         run: |
           cd debufrizer
+
           mkdir -p build
           cd build
 
@@ -58,18 +91,37 @@ jobs:
 
           make -j2
 
+          echo "=== Compilation terminee ==="
+          ls -lh
+
+
+      # ============================================================
+      # DECODAGE DU RADAR IMFR27
+      # ============================================================
+
       - name: Decoder IMFR27
         run: |
-          cp data/latest-imfr27.bufr debufrizer/examples/latest-imfr27.bufr
+          cp data/latest-imfr27.bufr \
+             debufrizer/examples/latest-imfr27.bufr
 
           cd debufrizer/examples
+
+          echo "====================================="
+          echo "DECODAGE RADAR IMFR27"
+          echo "====================================="
 
           ../build/debufrizer \
             latest-imfr27.bufr \
             radar_
 
+          echo ""
           echo "=== Fichiers produits ==="
           ls -lh
+
+
+      # ============================================================
+      # RECUPERATION DU GEOTIFF
+      # ============================================================
 
       - name: Recuperer le TIFF genere
         run: |
@@ -80,17 +132,28 @@ jobs:
             -name "radar_*.tif" \
             -exec cp {} output/ \;
 
-          TIFF=$(find output -type f -name "radar_*.tif" | head -n 1)
+          echo "=== TIFF disponibles ==="
+          ls -lh output/
+
+          TIFF=$(find output \
+            -type f \
+            -name "radar_*.tif" \
+            | sort \
+            | tail -n 1)
 
           if [ -z "$TIFF" ]; then
             echo "ERREUR : aucun TIFF radar genere."
             exit 1
           fi
 
+          echo "TIFF selectionne : $TIFF"
+
           cp "$TIFF" output/radar-latest.tif
 
-          echo "=== TIFF selectionne ==="
-          ls -lh output/radar-latest.tif
+
+      # ============================================================
+      # VERIFICATION GEOTIFF
+      # ============================================================
 
       - name: Examiner le TIFF radar
         run: |
@@ -98,7 +161,14 @@ jobs:
           echo "INFORMATIONS GEOTIFF"
           echo "====================================="
 
-          gdalinfo -stats output/radar-latest.tif
+          gdalinfo \
+            -stats \
+            output/radar-latest.tif
+
+
+      # ============================================================
+      # REPROJECTION + PNG TRANSPARENT
+      # ============================================================
 
       - name: Creer le PNG radar georeference
         run: |
@@ -109,8 +179,14 @@ jobs:
           python create_radar_png.py
 
           echo ""
-          echo "=== DATA ==="
+          echo "=== CONTENU DATA ==="
+
           ls -lh data/
+
+
+      # ============================================================
+      # VERIFICATION DU RESULTAT
+      # ============================================================
 
       - name: Verifier le PNG
         run: |
@@ -124,13 +200,21 @@ jobs:
             exit 1
           fi
 
-          echo "PNG radar cree avec succes."
+          echo "====================================="
+          echo "RADAR PNG CREE AVEC SUCCES"
+          echo "====================================="
 
           file data/radar-latest.png
 
           echo ""
           echo "=== METADONNEES ==="
+
           cat data/radar-latest.json
+
+
+      # ============================================================
+      # ENVOI FTP VERS INFOMANIAK
+      # ============================================================
 
       - name: Envoyer le radar vers Infomaniak
         env:
@@ -138,6 +222,7 @@ jobs:
           FTP_USER: ${{ secrets.INFOMANIAK_SFTP_USER }}
           FTP_PASSWORD: ${{ secrets.INFOMANIAK_SFTP_PASSWORD }}
           FTP_PATH: ${{ secrets.INFOMANIAK_SFTP_PATH }}
+
         run: |
           echo "====================================="
           echo "ENVOI DU RADAR VERS METEO-WORLD"
@@ -145,18 +230,34 @@ jobs:
 
           lftp -u "$FTP_USER","$FTP_PASSWORD" "$FTP_HOST" <<EOF
           set ftp:ssl-allow no
+          set net:max-retries 3
+          set net:timeout 20
+
           cd "$FTP_PATH"
-          put data/radar-latest.png -o radar-latest.png
-          put data/radar-latest.json -o radar-latest.json
+
+          put data/radar-latest.png \
+            -o radar-latest.png
+
+          put data/radar-latest.json \
+            -o radar-latest.json
+
           bye
           EOF
 
+          echo ""
           echo "Radar envoye sur Infomaniak."
+
+
+      # ============================================================
+      # ARTIFACT GITHUB DE SECOURS
+      # ============================================================
 
       - name: Sauvegarder le resultat GitHub
         uses: actions/upload-artifact@v4
         with:
           name: radar-png-test
+          retention-days: 1
+
           path: |
             output/radar-latest.tif
             output/radar-latest-4326.tif
