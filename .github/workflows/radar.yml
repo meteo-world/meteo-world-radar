@@ -48,23 +48,6 @@ jobs:
         run: |
           python download_radar.py
 
-          echo ""
-          echo "=============================================="
-          echo "IMFR27 SELECTIONNE"
-          echo "=============================================="
-
-          python - <<'PY'
-          import json
-          from pathlib import Path
-
-          info = json.loads(
-              Path("data/latest-imfr27.json").read_text(encoding="utf-8")
-          )
-
-          print("Fichier :", info.get("source_file"))
-          print("Date radar :", info.get("observation_time_utc"))
-          PY
-
 
       # ============================================================
       # OUTILS SYSTEME
@@ -241,288 +224,114 @@ jobs:
 
 
       # ============================================================
-      # DECODAGE IMFR27
+      # DECODAGE DES IMFR27 RECENTS
       # ============================================================
 
-      - name: Decoder IMFR27
+      - name: Decoder les IMFR27 recents et creer les frames
         run: |
-
-          cp \
-            data/latest-imfr27.bufr \
-            debufrizer/examples/latest-imfr27.bufr
-
-          cd debufrizer/examples
-
-          echo "=============================================="
-          echo "DECODAGE IMFR27"
-          echo "=============================================="
-
-          ../build/debufrizer \
-            latest-imfr27.bufr \
-            radar_ \
-            2>&1 \
-            | tee ../../debufrizer-imfr27.log
-
-          echo ""
-          echo "=============================================="
-          echo "FICHIERS PRODUITS"
-          echo "=============================================="
-
-          ls -lh
-
-
-      # ============================================================
-      # AFFICHAGE DIAGNOSTIC
-      # ============================================================
-
-      - name: Afficher diagnostic projection IMFR27
-        run: |
-
-          echo "===================================================="
-          echo "RESULTAT DIAGNOSTIC METEO WORLD"
-          echo "===================================================="
-
-          grep \
-            -A 10 \
-            -B 2 \
-            "METEO WORLD - DIAGNOSTIC GRILLE IMFR27" \
-            debufrizer-imfr27.log \
-            || true
-
-          echo ""
-          echo "===================================================="
-          echo "DESCRIPTEURS GEOGRAPHIQUES IMFR27"
-          echo "===================================================="
-
-          grep -iE \
-            "029002|029001|030021|030022|005033|006033|029192|005001|006001|005195|006198" \
-            debufrizer-imfr27.log \
-            || true
-
-
-      # ============================================================
-      # RECUPERATION DU TIFF
-      # ============================================================
-
-      - name: Recuperer TIFF
-        run: |
+          set -e
 
           mkdir -p output
+          mkdir -p data/generated-frames
 
-          find debufrizer/examples \
-            -type f \
-            -name "radar_*.tif" \
-            -exec cp {} output/ \;
+          python <<'PY'
+          import json
+          from pathlib import Path
 
-          echo ""
-          echo "=============================================="
-          echo "TIFF DISPONIBLES"
-          echo "=============================================="
+          items = json.loads(
+              Path("data/imfr27-candidates.json").read_text(encoding="utf-8")
+          )
 
-          ls -lh output/
+          Path("data/imfr27-list.txt").write_text(
+              "\n".join(item["bufr_file"] for item in items),
+              encoding="utf-8"
+          )
 
-          TIFF=$(find output \
-            -type f \
-            -name "radar_*.tif" \
-            | sort \
-            | tail -n 1)
+          print("IMFR27 à traiter :", len(items))
+          PY
 
-          if [ -z "$TIFF" ]; then
+          while IFS= read -r BUFR; do
+            [ -z "$BUFR" ] && continue
 
-              echo "ERREUR : aucun TIFF radar."
+            BASE="$(basename "$BUFR" .bufr)"
+            STAMP="${BASE#imfr27-}"
+
+            echo ""
+            echo "=============================================="
+            echo "TRAITEMENT $STAMP"
+            echo "=============================================="
+
+            rm -f debufrizer/examples/radar_*.tif
+            rm -f output/radar_*.tif
+            rm -f output/radar-latest.tif
+            rm -f output/radar-latest-3857.tif
+
+            cp "$BUFR" debufrizer/examples/latest-imfr27.bufr
+
+            (
+              cd debufrizer/examples
+              ../build/debufrizer \
+                latest-imfr27.bufr \
+                radar_ \
+                > ../../debufrizer-imfr27.log 2>&1
+            )
+
+            TIFF=$(find debufrizer/examples \
+              -type f \
+              -name "radar_*.tif" \
+              | sort \
+              | tail -n 1)
+
+            if [ -z "$TIFF" ]; then
+              echo "ERREUR : aucun TIFF pour $STAMP"
               exit 1
+            fi
 
-          fi
+            cp "$TIFF" output/radar-latest.tif
 
-          echo ""
-          echo "TIFF selectionne : $TIFF"
+            # create_radar_png.py continue d'utiliser exactement la chaîne
+            # de projection/PNG déjà validée sur Météo World.
+            python create_radar_png.py
 
-          cp \
-            "$TIFF" \
-            output/radar-latest.tif
-
-
-      # ============================================================
-      # EXAMEN DU TIFF ORIGINAL
-      # ============================================================
-
-      - name: Examiner GeoTIFF original
-        run: |
-
-          echo "===================================================="
-          echo "GEOTIFF ORIGINAL DEBUFRIZER"
-          echo "===================================================="
-
-          gdalinfo \
-            -stats \
-            output/radar-latest.tif
-
-          echo ""
-          echo "===================================================="
-          echo "PROJECTION SOURCE"
-          echo "===================================================="
-
-          gdalsrsinfo \
-            output/radar-latest.tif \
-            || true
-
-
-      # ============================================================
-      # COORDONNEES DU TIFF ORIGINAL
-      # ============================================================
-
-      - name: Afficher coordonnees GeoTIFF
-        run: |
-
-          echo "===================================================="
-          echo "ORIGINE / PIXELS / COINS"
-          echo "===================================================="
-
-          gdalinfo \
-            output/radar-latest.tif \
-            | grep -E \
-            "Size is|Origin|Pixel Size|Upper Left|Lower Left|Upper Right|Lower Right|Center" \
-            || true
-
-
-      # ============================================================
-      # CREATION PNG EPSG:3857
-      # ============================================================
-
-      - name: Creer PNG radar EPSG 3857
-        run: |
-
-          echo "===================================================="
-          echo "CREATION RADAR EPSG:3857"
-          echo "===================================================="
-
-          python create_radar_png.py
-
-          echo ""
-          echo "=============================================="
-          echo "CONTENU OUTPUT"
-          echo "=============================================="
-
-          ls -lh output/
-
-          echo ""
-          echo "=============================================="
-          echo "CONTENU DATA"
-          echo "=============================================="
-
-          ls -lh data/
-
-
-      # ============================================================
-      # VERIFICATION TIFF EPSG:3857
-      # ============================================================
-
-      - name: Examiner GeoTIFF EPSG 3857
-        run: |
-
-          if [ ! -f output/radar-latest-3857.tif ]; then
-
-              echo "ERREUR : radar-latest-3857.tif absent."
+            if [ ! -f data/frame-radar.png ]; then
+              echo "ERREUR : frame-radar.png absente pour $STAMP"
               exit 1
+            fi
 
-          fi
+            cp data/frame-radar.png "data/generated-frames/radar-$STAMP.png"
 
-          echo "===================================================="
-          echo "GEOTIFF EPSG:3857"
-          echo "===================================================="
-
-          gdalinfo \
-            output/radar-latest-3857.tif
+          done < data/imfr27-list.txt
 
           echo ""
-          echo "===================================================="
-          echo "PROJECTION EPSG:3857"
-          echo "===================================================="
-
-          gdalsrsinfo \
-            output/radar-latest-3857.tif \
-            || true
-
+          echo "Frames générées :"
+          ls -lh data/generated-frames/
 
       # ============================================================
-      # VERIFICATION PNG + JSON
+      # VERIFICATION DU DERNIER RADAR
       # ============================================================
 
       - name: Verifier radar final
         run: |
-
-          if [ ! -f data/radar-latest.png ]; then
-
-              echo "ERREUR : radar-latest.png absent."
-              exit 1
-
-          fi
-
-          if [ ! -f data/radar-latest.json ]; then
-
-              echo "ERREUR : radar-latest.json absent."
-              exit 1
-
-          fi
-
-          echo "===================================================="
-          echo "PNG FINAL"
-          echo "===================================================="
-
-          file \
-            data/radar-latest.png
-
-          echo ""
-          echo "===================================================="
-          echo "JSON FINAL"
-          echo "===================================================="
-
-          cat \
-            data/radar-latest.json
-
-
-      # ============================================================
-      # VERIFICATION PROJECTION JSON
-      # ============================================================
-
-      - name: Verifier projection JSON
-        run: |
+          test -f data/radar-latest.png
+          test -f data/radar-latest.json
+          test -f data/frame-radar.png
+          test -f data/frame-info.json
 
           python <<'PY'
-
           import json
           from pathlib import Path
 
-          path = Path(
-              "data/radar-latest.json"
-          )
-
           data = json.loads(
-              path.read_text(
-                  encoding="utf-8"
-              )
+              Path("data/radar-latest.json").read_text(encoding="utf-8")
           )
 
-          print(
-              "Projection :",
-              data.get("projection")
-          )
-
-          print(
-              "Bounds :",
-              data.get("bounds")
-          )
+          print("Projection :", data.get("projection"))
+          print("Bounds :", data.get("bounds"))
 
           if data.get("projection") != "EPSG:3857":
-
               raise SystemExit(
                   "ERREUR : le radar final n'est pas en EPSG:3857."
               )
-
-          print(
-              "Radar EPSG:3857 : OK"
-          )
-
           PY
 
 
@@ -536,40 +345,54 @@ jobs:
           python <<'PY'
           import json
           from pathlib import Path
-          info = json.loads(Path("data/frame-info.json").read_text(encoding="utf-8"))
-          Path("data/frame-filename.txt").write_text(info["filename"], encoding="utf-8")
-          print("Nouvelle frame :", info["filename"])
+
+          info = json.loads(
+              Path("data/frame-info.json").read_text(encoding="utf-8")
+          )
+
+          Path("data/frame-filename.txt").write_text(
+              info["filename"],
+              encoding="utf-8"
+          )
+
+          print("Dernière frame :", info["filename"])
           print("Date radar :", info["datetime"])
           PY
 
-      - name: Envoyer radar et frame vers Infomaniak
-        timeout-minutes: 2
+      - name: Envoyer radar et toutes les frames vers Infomaniak
+        timeout-minutes: 4
         env:
           FTP_HOST: ${{ secrets.INFOMANIAK_SFTP_HOST }}
           FTP_USER: ${{ secrets.INFOMANIAK_SFTP_USER }}
           FTP_PASSWORD: ${{ secrets.INFOMANIAK_SFTP_PASSWORD }}
         run: |
-          FRAME_NAME="$(cat data/frame-filename.txt)"
-          echo "Envoi de $FRAME_NAME"
+          {
+            echo "set cmd:fail-exit yes"
+            echo "set ftp:ssl-allow no"
+            echo "set ftp:passive-mode yes"
+            echo "set net:timeout 15"
+            echo "set net:reconnect-interval-base 5"
+            echo "set net:reconnect-interval-max 10"
+            echo "set net:max-retries 2"
 
-          timeout 90s lftp -u "$FTP_USER","$FTP_PASSWORD" "$FTP_HOST" <<EOF
-          set cmd:fail-exit yes
-          set ftp:ssl-allow no
-          set ftp:passive-mode yes
-          set net:timeout 15
-          set net:reconnect-interval-base 5
-          set net:reconnect-interval-max 10
-          set net:max-retries 2
+            echo "set cmd:fail-exit no"
+            echo "mkdir frames"
+            echo "set cmd:fail-exit yes"
 
-          set cmd:fail-exit no
-          mkdir frames
-          set cmd:fail-exit yes
-          put data/radar-latest.png -o radar-latest.png
-          put data/radar-latest.json -o radar-latest.json
-          put data/frame-radar.png -o frames/$FRAME_NAME
-          cls -1 frames/radar-*.png > remote-frames.txt
-          bye
-          EOF
+            echo "put data/radar-latest.png -o radar-latest.png"
+            echo "put data/radar-latest.json -o radar-latest.json"
+
+            for FRAME in data/generated-frames/radar-*.png; do
+              [ -f "$FRAME" ] || continue
+              NAME="$(basename "$FRAME")"
+              printf 'put "%s" -o "frames/%s"\n' "$FRAME" "$NAME"
+            done
+
+            echo "cls -1 frames/radar-*.png > remote-frames.txt"
+            echo "bye"
+          } > ftp-upload.txt
+
+          timeout 210s lftp -u "$FTP_USER","$FTP_PASSWORD" "$FTP_HOST" < ftp-upload.txt
 
           RESULT=$?
           if [ "$RESULT" -eq 124 ]; then
@@ -703,5 +526,7 @@ jobs:
             data/frame-info.json
             data/manifest.json
             data/latest-imfr27.json
+            data/imfr27-candidates.json
+            data/generated-frames/
             remote-frames.txt
             frames-to-delete.txt
