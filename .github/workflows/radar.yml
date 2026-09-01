@@ -302,18 +302,29 @@ jobs:
               if not already:
                   selected.append(item)
 
+          # IMPORTANT : même s'il n'y a aucune frame nouvelle à ajouter à
+          # l'historique, on retraite toujours le produit IMFR27 le plus récent.
+          # Cela garantit la création de radar-latest.png / radar-latest.json
+          # et évite que le workflow s'arrête à l'étape de vérification.
+          if not selected and items:
+              selected = [items[-1]]
+              print(
+                  "Aucune frame nouvelle : rafraichissement force du dernier produit :",
+                  items[-1]["datetime"]
+              )
+
           Path("data/imfr27-list.txt").write_text(
               "".join(item["bufr_file"] + "\n" for item in selected),
               encoding="utf-8"
           )
 
           print("IMFR27 disponibles :", len(items))
-          print("Nouvelles frames a traiter :", len(selected))
+          print("Frames a traiter sur ce passage :", len(selected))
           if selected:
-              print("Premiere nouvelle date :", selected[0]["datetime"])
-              print("Derniere nouvelle date :", selected[-1]["datetime"])
+              print("Premiere date traitee :", selected[0]["datetime"])
+              print("Derniere date traitee :", selected[-1]["datetime"])
           else:
-              print("Aucune nouvelle frame IMFR27 a publier sur ce passage.")
+              raise SystemExit("ERREUR : aucun produit IMFR27 disponible.")
           PY
 
           while IFS= read -r BUFR || [ -n "$BUFR" ]; do
