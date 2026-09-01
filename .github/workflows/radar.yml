@@ -242,12 +242,21 @@ jobs:
               Path("data/imfr27-candidates.json").read_text(encoding="utf-8")
           )
 
+          # IMPORTANT : une seule image radar est publiée par exécution.
+          # Le paquet Météo-France contient plusieurs échéances de 5 minutes.
+          # On traite ici uniquement la plus ancienne du paquet.
+          # Les exécutions suivantes publieront les suivantes.
+          items = sorted(items, key=lambda item: item["datetime"])
+          selected = items[0]
+
           Path("data/imfr27-list.txt").write_text(
-              "\n".join(item["bufr_file"] for item in items) + "\n",
+              selected["bufr_file"] + "\n",
               encoding="utf-8"
           )
 
-          print("IMFR27 à traiter :", len(items))
+          print("IMFR27 disponibles :", len(items))
+          print("IMFR27 traité sur ce passage : 1")
+          print("Date choisie :", selected["datetime"])
           PY
 
           while IFS= read -r BUFR || [ -n "$BUFR" ]; do
