@@ -7,7 +7,6 @@ import math
 
 import numpy as np
 from PIL import Image
-from osgeo import gdal
 
 
 # ============================================================
@@ -24,19 +23,44 @@ DATA.mkdir(exist_ok=True)
 
 
 # ============================================================
+# FONCTION COMMANDE
+# ============================================================
+
+def run_command(command):
+
+    print(
+        "Commande :",
+        " ".join(str(x) for x in command)
+    )
+
+    result = subprocess.run(
+        command,
+        check=True,
+        capture_output=True,
+        text=True
+    )
+
+    return result.stdout
+
+
+# ============================================================
 # RECHERCHE DU TIFF ORIGINAL
 # ============================================================
 
 files = sorted(
+
     [
         p for p in OUTPUT.glob("radar_*.tif")
+
         if p.name not in {
             "radar-latest.tif",
             "radar-latest-3857.tif",
             "radar-latest-4326.tif",
         }
     ],
+
     key=lambda p: p.stat().st_mtime,
+
     reverse=True
 )
 
@@ -66,137 +90,225 @@ print("TIFF source :", source_tif)
 
 
 # ============================================================
-# REPROJECTION VERS WEB MERCATOR
+# REPROJECTION VERS EPSG:3857
 # ============================================================
 
-mercator_tif = OUTPUT / "radar-latest-3857.tif"
+mercator_tif = (
+    OUTPUT
+    / "radar-latest-3857.tif"
+)
 
 
 print("")
-print("Reprojection vers EPSG:3857...")
-
-
-commande = [
-
-    "gdalwarp",
-
-    "-overwrite",
-
-    "-t_srs",
-    "EPSG:3857",
-
-    "-r",
-    "near",
-
-    "-dstnodata",
-    "-9999",
-
-    "-ot",
-    "Float32",
-
-    "-multi",
-
-    "-wo",
-    "NUM_THREADS=ALL_CPUS",
-
-    str(source_tif),
-
-    str(mercator_tif),
-
-]
+print("==============================================")
+print("REPROJECTION EPSG:3857")
+print("==============================================")
 
 
 subprocess.run(
-    commande,
+
+    [
+
+        "gdalwarp",
+
+        "-overwrite",
+
+        "-t_srs",
+        "EPSG:3857",
+
+        "-r",
+        "near",
+
+        "-dstnodata",
+        "-9999",
+
+        "-ot",
+        "Float32",
+
+        "-multi",
+
+        "-wo",
+        "NUM_THREADS=ALL_CPUS",
+
+        str(source_tif),
+
+        str(mercator_tif),
+
+    ],
+
     check=True
+
 )
 
 
-print("Reprojection terminee.")
-
-
-# ============================================================
-# OUVERTURE DU TIFF 3857
-# ============================================================
-
-dataset = gdal.Open(
-    str(mercator_tif)
-)
-
-
-if dataset is None:
+if not mercator_tif.exists():
 
     raise SystemExit(
-        "ERREUR : impossible d'ouvrir le TIFF EPSG:3857."
+        "ERREUR : le TIFF EPSG:3857 n'a pas ete cree."
     )
 
 
-band = dataset.GetRasterBand(1)
-
-array = band.ReadAsArray().astype(
-    np.float32
+print("")
+print(
+    "TIFF EPSG:3857 cree :",
+    mercator_tif
 )
 
 
-width = dataset.RasterXSize
-height = dataset.RasterYSize
+# ============================================================
+# GDALINFO JSON
+#
+# On utilise la commande gdalinfo au lieu du module Python
+# osgeo.gdal.
+# ============================================================
+
+print("")
+print("==============================================")
+print("LECTURE GEOREFERENCEMENT")
+print("==============================================")
+
+
+gdalinfo_result = subprocess.run(
+
+    [
+        "gdalinfo",
+        "-json",
+        str(mercator_tif)
+    ],
+
+    check=True,
+    capture_output=True,
+    text=True
+
+)
+
+
+try:
+
+    info = json.loads(
+        gdalinfo_result.stdout
+    )
+
+except Exception as e:
+
+    raise SystemExit(
+        f"ERREUR lecture JSON gdalinfo : {e}"
+    )
+
+
+# ============================================================
+# DIMENSIONS
+# ============================================================
+
+size = info.get("size")
+
+
+if not size or len(size) != 2:
+
+    raise SystemExit(
+        "ERREUR : dimensions TIFF introuvables."
+    )
+
+
+width = int(size[0])
+height = int(size[1])
 
 
 print("")
-print("Dimensions :", width, "x", height)
+print(
+    "Dimensions :",
+    width,
+    "x",
+    height
+)
 
 
 # ============================================================
-# GEOREFERENCEMENT EPSG:3857
+# GEOTRANSFORM
 # ============================================================
 
-gt = dataset.GetGeoTransform()
+gt = info.get("geoTransform")
 
 
-xmin = gt[0]
+if not gt or len(gt) != 6:
 
-ymax = gt[3]
+    raise SystemExit(
+        "ERREUR : GeoTransform introuvable."
+    )
+
+
+xmin = float(gt[0])
+pixel_width = float(gt[1])
+
+rotation_x = float(gt[2])
+
+ymax = float(gt[3])
+
+rotation_y = float(gt[4])
+pixel_height = float(gt[5])
+
 
 xmax = (
     xmin
-    + gt[1] * width
-    + gt[2] * height
+    + pixel_width * width
+    + rotation_x * height
 )
+
 
 ymin = (
     ymax
-    + gt[4] * width
-    + gt[5] * height
+    + rotation_y * width
+    + pixel_height * height
 )
 
 
 print("")
 print("Bounds EPSG:3857 :")
-print("xmin :", xmin)
-print("xmax :", xmax)
-print("ymin :", ymin)
-print("ymax :", ymax)
+
+print(
+    "xmin =",
+    xmin
+)
+
+print(
+    "xmax =",
+    xmax
+)
+
+print(
+    "ymin =",
+    ymin
+)
+
+print(
+    "ymax =",
+    ymax
+)
 
 
 # ============================================================
-# CONVERSION WEB MERCATOR -> LAT/LON
+# CONVERSION EPSG:3857 -> LONGITUDE / LATITUDE
 # ============================================================
 
-R = 6378137.0
+EARTH_RADIUS = 6378137.0
 
 
 def mercator_to_lonlat(x, y):
 
     lon = math.degrees(
-        x / R
+        x / EARTH_RADIUS
     )
 
     lat = math.degrees(
+
         math.atan(
+
             math.sinh(
-                y / R
+                y / EARTH_RADIUS
             )
+
         )
+
     )
 
     return lon, lat
@@ -207,6 +319,7 @@ west, north = mercator_to_lonlat(
     ymax
 )
 
+
 east, south = mercator_to_lonlat(
     xmax,
     ymin
@@ -214,15 +327,130 @@ east, south = mercator_to_lonlat(
 
 
 print("")
-print("Bounds Leaflet :")
-print("south :", south)
-print("west  :", west)
-print("north :", north)
-print("east  :", east)
+print("==============================================")
+print("BOUNDS LEAFLET")
+print("==============================================")
+
+print(
+    "south =",
+    south
+)
+
+print(
+    "west  =",
+    west
+)
+
+print(
+    "north =",
+    north
+)
+
+print(
+    "east  =",
+    east
+)
 
 
 # ============================================================
-# MASQUE DES DONNEES VALIDES
+# EXPORT DU TIFF EN FLOAT32 BRUT
+#
+# Cela permet de lire les valeurs radar avec NumPy sans GDAL
+# Python.
+# ============================================================
+
+raw_file = OUTPUT / "radar-latest.raw"
+
+
+if raw_file.exists():
+
+    raw_file.unlink()
+
+
+print("")
+print("==============================================")
+print("LECTURE DES VALEURS RADAR")
+print("==============================================")
+
+
+subprocess.run(
+
+    [
+
+        "gdal_translate",
+
+        "-q",
+
+        "-of",
+        "ENVI",
+
+        "-ot",
+        "Float32",
+
+        str(mercator_tif),
+
+        str(raw_file),
+
+    ],
+
+    check=True
+
+)
+
+
+# ENVI cree normalement :
+#
+# radar-latest.raw
+# radar-latest.hdr
+
+
+if not raw_file.exists():
+
+    raise SystemExit(
+        "ERREUR : fichier raster brut absent."
+    )
+
+
+# ============================================================
+# LECTURE NUMPY
+# ============================================================
+
+expected_values = (
+    width
+    * height
+)
+
+
+array = np.fromfile(
+
+    raw_file,
+
+    dtype=np.float32
+
+)
+
+
+if array.size != expected_values:
+
+    raise SystemExit(
+
+        "ERREUR : taille raster inattendue. "
+        f"Attendu={expected_values}, "
+        f"obtenu={array.size}"
+
+    )
+
+
+array = array.reshape(
+    (
+        height,
+        width
+    )
+)
+
+
+# ============================================================
+# DONNEES VALIDES
 # ============================================================
 
 valid = (
@@ -244,19 +472,28 @@ if not np.any(valid):
 
 
 minimum = float(
-    np.min(array[valid])
+    np.min(
+        array[valid]
+    )
 )
 
+
 maximum = float(
-    np.max(array[valid])
+    np.max(
+        array[valid]
+    )
 )
 
 
 print("")
 print(
-    "Reflectivite min/max :",
+    "Reflectivite minimum :",
     minimum,
-    "/",
+    "dBZ"
+)
+
+print(
+    "Reflectivite maximum :",
     maximum,
     "dBZ"
 )
@@ -267,54 +504,103 @@ print(
 # ============================================================
 
 rgba = np.zeros(
+
     (
         height,
         width,
         4
     ),
+
     dtype=np.uint8
+
 )
 
 
 # ============================================================
-# PALETTE RADAR
+# PALETTE METEO WORLD
 # ============================================================
 
 palette = [
 
-    (-40, (0, 0, 0, 0)),
+    (
+        0,
+        (100, 220, 255, 100)
+    ),
 
-    (0,   (100, 220, 255, 100)),
+    (
+        5,
+        (70, 190, 255, 120)
+    ),
 
-    (5,   (70, 190, 255, 120)),
+    (
+        10,
+        (40, 150, 255, 140)
+    ),
 
-    (10,  (40, 150, 255, 140)),
+    (
+        15,
+        (0, 110, 255, 160)
+    ),
 
-    (15,  (0, 110, 255, 160)),
+    (
+        20,
+        (0, 210, 120, 170)
+    ),
 
-    (20,  (0, 210, 120, 170)),
+    (
+        25,
+        (0, 180, 70, 180)
+    ),
 
-    (25,  (0, 180, 70, 180)),
+    (
+        30,
+        (180, 220, 0, 190)
+    ),
 
-    (30,  (180, 220, 0, 190)),
+    (
+        35,
+        (255, 230, 0, 200)
+    ),
 
-    (35,  (255, 230, 0, 200)),
+    (
+        40,
+        (255, 180, 0, 210)
+    ),
 
-    (40,  (255, 180, 0, 210)),
+    (
+        45,
+        (255, 110, 0, 220)
+    ),
 
-    (45,  (255, 110, 0, 220)),
+    (
+        50,
+        (255, 30, 0, 230)
+    ),
 
-    (50,  (255, 30, 0, 230)),
+    (
+        55,
+        (210, 0, 0, 235)
+    ),
 
-    (55,  (210, 0, 0, 235)),
+    (
+        60,
+        (180, 0, 180, 240)
+    ),
 
-    (60,  (180, 0, 180, 240)),
+    (
+        65,
+        (220, 0, 220, 245)
+    ),
 
-    (65,  (220, 0, 220, 245)),
+    (
+        70,
+        (255, 120, 255, 250)
+    ),
 
-    (70,  (255, 120, 255, 250)),
-
-    (75,  (255, 255, 255, 255)),
+    (
+        75,
+        (255, 255, 255, 255)
+    ),
 
 ]
 
@@ -323,41 +609,56 @@ palette = [
 # COLORISATION
 # ============================================================
 
-for i in range(
-    1,
-    len(palette)
-):
+for i, item in enumerate(palette):
 
-    low_value = palette[i][0]
+    low_value = item[0]
+    color = item[1]
+
 
     if i < len(palette) - 1:
 
-        high_value = palette[i + 1][0]
+        high_value = (
+            palette[i + 1][0]
+        )
+
 
         mask = (
+
             valid
+
             &
+
             (array >= low_value)
+
             &
+
             (array < high_value)
+
         )
+
 
     else:
 
         mask = (
+
             valid
+
             &
+
             (array >= low_value)
+
         )
 
 
     rgba[
         mask
-    ] = palette[i][1]
+    ] = color
 
 
 # ============================================================
-# TRANSPARENCE SOUS 0 DBZ
+# TRANSPARENCE
+#
+# Toutes les valeurs < 0 dBZ restent transparentes.
 # ============================================================
 
 rgba[
@@ -371,9 +672,13 @@ rgba[
 
 
 rgba[
+
     valid
+
     &
+
     (array < 0)
+
 ] = (
     0,
     0,
@@ -383,10 +688,13 @@ rgba[
 
 
 # ============================================================
-# CREATION PNG
+# CREATION DU PNG
 # ============================================================
 
-png_path = DATA / "radar-latest.png"
+png_path = (
+    DATA
+    / "radar-latest.png"
+)
 
 
 image = Image.fromarray(
@@ -409,7 +717,7 @@ print(
 
 
 # ============================================================
-# RECUPERATION DATE RADAR
+# DATE DU RADAR
 # ============================================================
 
 datetime_radar = None
@@ -426,10 +734,13 @@ if metadata_path.exists():
     try:
 
         metadata = json.loads(
+
             metadata_path.read_text(
                 encoding="utf-8"
             )
+
         )
+
 
         datetime_radar = (
 
@@ -449,6 +760,7 @@ if metadata_path.exists():
 
         )
 
+
     except Exception as e:
 
         print(
@@ -458,7 +770,7 @@ if metadata_path.exists():
 
 
 # ============================================================
-# JSON POUR LEAFLET
+# JSON LEAFLET
 # ============================================================
 
 json_data = {
@@ -528,9 +840,13 @@ json_path = (
 json_path.write_text(
 
     json.dumps(
+
         json_data,
+
         indent=2,
+
         ensure_ascii=False
+
     ),
 
     encoding="utf-8"
@@ -545,7 +861,37 @@ print(
 
 
 # ============================================================
-# RESULTAT
+# NETTOYAGE FICHIERS TEMPORAIRES
+# ============================================================
+
+try:
+
+    if raw_file.exists():
+
+        raw_file.unlink()
+
+
+    hdr_file = (
+        OUTPUT
+        / "radar-latest.hdr"
+    )
+
+
+    if hdr_file.exists():
+
+        hdr_file.unlink()
+
+
+except Exception as e:
+
+    print(
+        "Nettoyage fichiers temporaires :",
+        e
+    )
+
+
+# ============================================================
+# RESULTAT FINAL
 # ============================================================
 
 print("")
