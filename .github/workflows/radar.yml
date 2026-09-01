@@ -546,7 +546,9 @@ jobs:
           set net:reconnect-interval-max 10
           set net:max-retries 2
 
-          mkdir -p frames
+          set cmd:fail-exit no
+          mkdir frames
+          set cmd:fail-exit yes
           put data/radar-latest.png -o radar-latest.png
           put data/radar-latest.json -o radar-latest.json
           put data/frame-radar.png -o frames/$FRAME_NAME
@@ -644,7 +646,7 @@ jobs:
             echo "bye"
           } > ftp-cleanup.txt
 
-          timeout 90s lftp -u "$FTP_USER","$FTP_PASSWORD" "$FTP_HOST" -f ftp-cleanup.txt
+          timeout 90s lftp -u "$FTP_USER","$FTP_PASSWORD" "$FTP_HOST" < ftp-cleanup.txt
 
           RESULT=$?
           if [ "$RESULT" -eq 124 ]; then
