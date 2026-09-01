@@ -13,7 +13,7 @@ jobs:
     steps:
 
       # ============================================================
-      # DEPOT GITHUB
+      # DEPOT
       # ============================================================
 
       - name: Recuperer le depot
@@ -36,7 +36,7 @@ jobs:
 
 
       # ============================================================
-      # TELECHARGEMENT METEO-FRANCE
+      # RADAR METEO-FRANCE
       # ============================================================
 
       - name: Telecharger le radar Meteo-France
@@ -47,10 +47,10 @@ jobs:
 
 
       # ============================================================
-      # OUTILS NECESSAIRES
+      # OUTILS
       # ============================================================
 
-      - name: Installer les outils de decodage
+      - name: Installer les outils
         run: |
           sudo apt-get update
 
@@ -62,13 +62,13 @@ jobs:
             gdal-bin \
             lftp
 
-          echo "=== Versions ==="
+          echo "=============================="
+          echo "VERSIONS"
+          echo "=============================="
 
           g++-14 --version
           cmake --version
-          gdal-config --version
           gdalinfo --version
-          lftp --version
 
 
       # ============================================================
@@ -78,6 +78,28 @@ jobs:
       - name: Recuperer debufrizer
         run: |
           git clone https://github.com/Meteo-Concept/debufrizer.git
+
+
+      # ============================================================
+      # DIAGNOSTIC DU CODE DEBUFRIZER
+      # ============================================================
+
+      - name: Examiner la projection utilisee par debufrizer
+        run: |
+          echo "===================================================="
+          echo "RECHERCHE DES PARAMETRES DE PROJECTION DEBUFRIZER"
+          echo "===================================================="
+
+          grep -RniE \
+            "stereo|stereographic|projection|proj4|latitude|longitude|parallel|easting|northing|orientation|WGS" \
+            debufrizer \
+            --exclude-dir=.git \
+            || true
+
+
+      # ============================================================
+      # COMPILATION
+      # ============================================================
 
       - name: Compiler debufrizer
         run: |
@@ -91,12 +113,13 @@ jobs:
 
           make -j2
 
-          echo "=== Compilation terminee ==="
+          echo ""
+          echo "=== Fichiers compiles ==="
           ls -lh
 
 
       # ============================================================
-      # DECODAGE DU RADAR IMFR27
+      # DECODAGE IMFR27 + LOG COMPLET
       # ============================================================
 
       - name: Decoder IMFR27
@@ -106,13 +129,14 @@ jobs:
 
           cd debufrizer/examples
 
-          echo "====================================="
-          echo "DECODAGE RADAR IMFR27"
-          echo "====================================="
+          echo "======================================="
+          echo "DECODAGE COMPLET IMFR27"
+          echo "======================================="
 
           ../build/debufrizer \
             latest-imfr27.bufr \
-            radar_
+            radar_ \
+            2>&1 | tee ../../debufrizer-imfr27.log
 
           echo ""
           echo "=== Fichiers produits ==="
@@ -120,7 +144,28 @@ jobs:
 
 
       # ============================================================
-      # RECUPERATION DU GEOTIFF
+      # EXTRACTION DES INFORMATIONS GEOGRAPHIQUES DU LOG
+      # ============================================================
+
+      - name: Diagnostic geographique IMFR27
+        run: |
+          echo "===================================================="
+          echo "PARAMETRES GEOGRAPHIQUES TROUVES DANS LE BUFR"
+          echo "===================================================="
+
+          grep -iE \
+            "latitude|longitude|pixel|row|column|projection|orientation|stereo|grid|origin|coordinate|029|005|006|030021|030022" \
+            debufrizer-imfr27.log \
+            || true
+
+          echo ""
+          echo "===================================================="
+          echo "FIN DU DIAGNOSTIC BUFR"
+          echo "===================================================="
+
+
+      # ============================================================
+      # RECUPERATION DU TIFF
       # ============================================================
 
       - name: Recuperer le TIFF genere
@@ -152,43 +197,74 @@ jobs:
 
 
       # ============================================================
-      # VERIFICATION GEOTIFF
+      # DIAGNOSTIC DU GEOTIFF
       # ============================================================
 
-      - name: Examiner le TIFF radar
+      - name: Examiner le GeoTIFF produit par debufrizer
         run: |
-          echo "====================================="
-          echo "INFORMATIONS GEOTIFF"
-          echo "====================================="
+          echo "===================================================="
+          echo "GEOTIFF PRODUIT PAR DEBUFRIZER"
+          echo "===================================================="
 
           gdalinfo \
             -stats \
             output/radar-latest.tif
 
+          echo ""
+          echo "===================================================="
+          echo "SYSTEME DE COORDONNEES"
+          echo "===================================================="
+
+          gdalsrsinfo \
+            output/radar-latest.tif \
+            || true
+
 
       # ============================================================
-      # REPROJECTION + PNG TRANSPARENT
+      # TRANSFORMATION DE POINTS TEST
+      # ============================================================
+
+      - name: Tester les coordonnees du GeoTIFF
+        run: |
+          echo "===================================================="
+          echo "COINS DU RASTER"
+          echo "===================================================="
+
+          gdalinfo output/radar-latest.tif \
+            | grep -A 6 "Corner Coordinates"
+
+          echo ""
+          echo "===================================================="
+          echo "CENTRE DU RASTER"
+          echo "===================================================="
+
+          gdalinfo output/radar-latest.tif \
+            | grep "Center" \
+            || true
+
+
+      # ============================================================
+      # PNG REPROJETE
       # ============================================================
 
       - name: Creer le PNG radar georeference
         run: |
-          echo "====================================="
-          echo "CREATION PNG RADAR EPSG4326"
-          echo "====================================="
+          echo "===================================================="
+          echo "CREATION PNG RADAR"
+          echo "===================================================="
 
           python create_radar_png.py
 
           echo ""
-          echo "=== CONTENU DATA ==="
-
+          echo "=== DATA ==="
           ls -lh data/
 
 
       # ============================================================
-      # VERIFICATION DU RESULTAT
+      # VERIFICATION DU PNG ET DES BOUNDS
       # ============================================================
 
-      - name: Verifier le PNG
+      - name: Verifier le radar final
         run: |
           if [ ! -f data/radar-latest.png ]; then
             echo "ERREUR : radar-latest.png absent."
@@ -200,20 +276,22 @@ jobs:
             exit 1
           fi
 
-          echo "====================================="
-          echo "RADAR PNG CREE AVEC SUCCES"
-          echo "====================================="
+          echo "===================================================="
+          echo "PNG RADAR OK"
+          echo "===================================================="
 
           file data/radar-latest.png
 
           echo ""
-          echo "=== METADONNEES ==="
+          echo "===================================================="
+          echo "JSON / BOUNDS LEAFLET"
+          echo "===================================================="
 
           cat data/radar-latest.json
 
 
       # ============================================================
-      # ENVOI FTP VERS INFOMANIAK
+      # ENVOI FTP INFOMANIAK
       # ============================================================
 
       - name: Envoyer le radar vers Infomaniak
@@ -224,9 +302,9 @@ jobs:
           FTP_PATH: ${{ secrets.INFOMANIAK_SFTP_PATH }}
 
         run: |
-          echo "====================================="
-          echo "ENVOI DU RADAR VERS METEO-WORLD"
-          echo "====================================="
+          echo "===================================================="
+          echo "ENVOI VERS INFOMANIAK"
+          echo "===================================================="
 
           lftp -u "$FTP_USER","$FTP_PASSWORD" "$FTP_HOST" <<EOF
           set ftp:ssl-allow no
@@ -235,11 +313,8 @@ jobs:
 
           cd "$FTP_PATH"
 
-          put data/radar-latest.png \
-            -o radar-latest.png
-
-          put data/radar-latest.json \
-            -o radar-latest.json
+          put data/radar-latest.png -o radar-latest.png
+          put data/radar-latest.json -o radar-latest.json
 
           bye
           EOF
@@ -249,16 +324,18 @@ jobs:
 
 
       # ============================================================
-      # ARTIFACT GITHUB DE SECOURS
+      # SAUVEGARDE DES DIAGNOSTICS
       # ============================================================
 
-      - name: Sauvegarder le resultat GitHub
+      - name: Sauvegarder le diagnostic GitHub
         uses: actions/upload-artifact@v4
+
         with:
-          name: radar-png-test
+          name: radar-diagnostic
           retention-days: 1
 
           path: |
+            debufrizer-imfr27.log
             output/radar-latest.tif
             output/radar-latest-4326.tif
             data/radar-latest.png
