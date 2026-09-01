@@ -48,6 +48,23 @@ jobs:
         run: |
           python download_radar.py
 
+          echo ""
+          echo "=============================================="
+          echo "IMFR27 SELECTIONNE"
+          echo "=============================================="
+
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          info = json.loads(
+              Path("data/latest-imfr27.json").read_text(encoding="utf-8")
+          )
+
+          print("Fichier :", info.get("source_file"))
+          print("Date radar :", info.get("observation_time_utc"))
+          PY
+
 
       # ============================================================
       # OUTILS SYSTEME
