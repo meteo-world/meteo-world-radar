@@ -3,9 +3,7 @@ name: Meteo World Radar
 on:
   workflow_dispatch:
 
-  schedule:
-    - cron: "2-57/5 * * * *"
-
+ 
 
 jobs:
 
