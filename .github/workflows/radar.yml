@@ -1,3 +1,137 @@
+name: Meteo World Radar
+
+on:
+  workflow_dispatch:
+
+jobs:
+  radar:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Recuperer le depot
+        uses: actions/checkout@v4
+
+      - name: Installer Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Installer les dependances Python
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests numpy pillow
+
+      - name: Telecharger le radar Meteo-France
+        env:
+          METEOFRANCE_RADAR_API_KEY: ${{ secrets.METEOFRANCE_RADAR_API_KEY }}
+        run: |
+          python download_radar.py
+
+      - name: Installer les outils de decodage
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            g++-14 \
+            cmake \
+            make \
+            libgdal-dev \
+            gdal-bin \
+            lftp
+
+          g++-14 --version
+          cmake --version
+          gdal-config --version
+          gdalinfo --version
+
+      - name: Recuperer debufrizer
+        run: |
+          git clone https://github.com/Meteo-Concept/debufrizer.git
+
+      - name: Compiler debufrizer
+        run: |
+          cd debufrizer
+          mkdir -p build
+          cd build
+
+          cmake .. \
+            -DCMAKE_CXX_COMPILER=g++-14
+
+          make -j2
+
+      - name: Decoder IMFR27
+        run: |
+          cp data/latest-imfr27.bufr debufrizer/examples/latest-imfr27.bufr
+
+          cd debufrizer/examples
+
+          ../build/debufrizer \
+            latest-imfr27.bufr \
+            radar_
+
+          echo "=== Fichiers produits ==="
+          ls -lh
+
+      - name: Recuperer le TIFF genere
+        run: |
+          mkdir -p output
+
+          find debufrizer/examples \
+            -type f \
+            -name "radar_*.tif" \
+            -exec cp {} output/ \;
+
+          TIFF=$(find output -type f -name "radar_*.tif" | head -n 1)
+
+          if [ -z "$TIFF" ]; then
+            echo "ERREUR : aucun TIFF radar genere."
+            exit 1
+          fi
+
+          cp "$TIFF" output/radar-latest.tif
+
+          echo "=== TIFF selectionne ==="
+          ls -lh output/radar-latest.tif
+
+      - name: Examiner le TIFF radar
+        run: |
+          echo "====================================="
+          echo "INFORMATIONS GEOTIFF"
+          echo "====================================="
+
+          gdalinfo -stats output/radar-latest.tif
+
+      - name: Creer le PNG radar georeference
+        run: |
+          echo "====================================="
+          echo "CREATION PNG RADAR EPSG4326"
+          echo "====================================="
+
+          python create_radar_png.py
+
+          echo ""
+          echo "=== DATA ==="
+          ls -lh data/
+
+      - name: Verifier le PNG
+        run: |
+          if [ ! -f data/radar-latest.png ]; then
+            echo "ERREUR : radar-latest.png absent."
+            exit 1
+          fi
+
+          if [ ! -f data/radar-latest.json ]; then
+            echo "ERREUR : radar-latest.json absent."
+            exit 1
+          fi
+
+          echo "PNG radar cree avec succes."
+
+          file data/radar-latest.png
+
+          echo ""
+          echo "=== METADONNEES ==="
+          cat data/radar-latest.json
+
       - name: Envoyer le radar vers Infomaniak
         env:
           FTP_HOST: ${{ secrets.INFOMANIAK_SFTP_HOST }}
@@ -5,9 +139,6 @@
           FTP_PASSWORD: ${{ secrets.INFOMANIAK_SFTP_PASSWORD }}
           FTP_PATH: ${{ secrets.INFOMANIAK_SFTP_PATH }}
         run: |
-          sudo apt-get update
-          sudo apt-get install -y lftp
-
           echo "====================================="
           echo "ENVOI DU RADAR VERS METEO-WORLD"
           echo "====================================="
@@ -21,3 +152,14 @@
           EOF
 
           echo "Radar envoye sur Infomaniak."
+
+      - name: Sauvegarder le resultat GitHub
+        uses: actions/upload-artifact@v4
+        with:
+          name: radar-png-test
+          path: |
+            output/radar-latest.tif
+            output/radar-latest-4326.tif
+            data/radar-latest.png
+            data/radar-latest.json
+            data/latest-imfr27.json
