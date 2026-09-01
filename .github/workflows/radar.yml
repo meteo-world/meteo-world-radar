@@ -224,6 +224,33 @@ jobs:
 
 
       # ============================================================
+      # FRAMES DEJA PRESENTES SUR INFOMANIAK
+      # ============================================================
+
+      - name: Lire les frames deja publiees
+        timeout-minutes: 2
+        env:
+          FTP_HOST: ${{ secrets.INFOMANIAK_SFTP_HOST }}
+          FTP_USER: ${{ secrets.INFOMANIAK_SFTP_USER }}
+          FTP_PASSWORD: ${{ secrets.INFOMANIAK_SFTP_PASSWORD }}
+        run: |
+          {
+            echo "set cmd:fail-exit yes"
+            echo "set ftp:ssl-allow no"
+            echo "set ftp:passive-mode yes"
+            echo "set net:timeout 15"
+            echo "set net:max-retries 2"
+            echo "set cmd:fail-exit no"
+            echo "cls -1 frames/radar-*.png"
+            echo "bye"
+          } > ftp-list-before.txt
+
+          lftp -u "$FTP_USER","$FTP_PASSWORD" "$FTP_HOST" < ftp-list-before.txt > remote-frames-before.txt || true
+
+          echo "Frames deja publiees :"
+          cat remote-frames-before.txt || true
+
+      # ============================================================
       # DECODAGE DES IMFR27 RECENTS
       # ============================================================
 
@@ -242,21 +269,91 @@ jobs:
               Path("data/imfr27-candidates.json").read_text(encoding="utf-8")
           )
 
-          # IMPORTANT : une seule image radar est publiée par exécution.
-          # Le paquet Météo-France contient plusieurs échéances de 5 minutes.
-          # On traite ici uniquement la plus ancienne du paquet.
-          # Les exécutions suivantes publieront les suivantes.
+          # Une seule NOUVELLE image radar est publiée par exécution.
+          # On choisit la plus ancienne image du paquet qui n'existe pas
+          # encore dans /frames/ sur Infomaniak.
+          import re
+          from datetime import datetime
+
           items = sorted(items, key=lambda item: item["datetime"])
-          selected = items[0]
 
-          Path("data/imfr27-list.txt").write_text(
-              selected["bufr_file"] + "\n",
-              encoding="utf-8"
-          )
+          remote_names = set()
+          remote_file = Path("remote-frames-before.txt")
 
-          print("IMFR27 disponibles :", len(items))
-          print("IMFR27 traité sur ce passage : 1")
-          print("Date choisie :", selected["datetime"])
+          if remote_file.exists():
+              for line in remote_file.read_text(
+                  encoding="utf-8",
+                  errors="ignore"
+              ).splitlines():
+                  name = line.strip().replace("\\", "/").rsplit("/", 1)[-1]
+
+                  if re.fullmatch(
+                      r"radar-\d{8}-\d{4}\.png",
+                      name
+                  ):
+                      remote_names.add(name)
+
+          selected = None
+
+          for item in items:
+              dt = item["datetime"]
+              parsed = datetime.fromisoformat(
+                  dt.replace("Z", "+00:00")
+              )
+
+              filename = (
+                  "radar-" +
+                  parsed.strftime("%Y%m%d-%H%M") +
+                  ".png"
+              )
+
+              print(
+                  "Candidat :",
+                  dt,
+                  "->",
+                  filename,
+                  "DEJA PUBLIE"
+                  if filename in remote_names
+                  else "NOUVEAU"
+              )
+
+              if filename not in remote_names:
+                  selected = item
+                  break
+
+          if selected is None:
+              print(
+                  "Aucune nouvelle frame IMFR27 "
+                  "a publier sur ce passage."
+              )
+
+              Path(
+                  "data/imfr27-list.txt"
+              ).write_text(
+                  "",
+                  encoding="utf-8"
+              )
+          else:
+              Path(
+                  "data/imfr27-list.txt"
+              ).write_text(
+                  selected["bufr_file"] + "\n",
+                  encoding="utf-8"
+              )
+
+              print(
+                  "IMFR27 disponibles :",
+                  len(items)
+              )
+
+              print(
+                  "IMFR27 traite sur ce passage : 1"
+              )
+
+              print(
+                  "Date choisie :",
+                  selected["datetime"]
+              )
           PY
 
           while IFS= read -r BUFR || [ -n "$BUFR" ]; do
