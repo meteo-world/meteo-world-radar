@@ -2,6 +2,7 @@ name: Meteo World Radar
 
 on:
   workflow_dispatch:
+ 
 
  
 
@@ -240,6 +241,7 @@ jobs:
             echo "set ftp:passive-mode yes"
             echo "set net:timeout 15"
             echo "set net:max-retries 2"
+            echo "cd sites/meteo-world.fr/cartes/radar"
             echo "set cmd:fail-exit no"
             echo "cls -1 frames/radar-*.png"
             echo "bye"
@@ -499,9 +501,10 @@ jobs:
             echo "set net:reconnect-interval-base 5"
             echo "set net:reconnect-interval-max 10"
             echo "set net:max-retries 2"
+            echo "cd sites/meteo-world.fr/cartes/radar"
 
             echo "set cmd:fail-exit no"
-            echo "mkdir frames"
+            echo "mkdir -p frames"
             echo "set cmd:fail-exit yes"
 
             echo "put data/radar-latest.png -o radar-latest.png"
@@ -607,6 +610,7 @@ jobs:
             echo "set net:reconnect-interval-base 5"
             echo "set net:reconnect-interval-max 10"
             echo "set net:max-retries 2"
+            echo "cd sites/meteo-world.fr/cartes/radar"
             echo "put data/manifest.json -o manifest.json"
 
             if [ -s frames-to-delete.txt ]; then
